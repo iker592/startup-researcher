@@ -12,7 +12,7 @@ const client = new DynamoDBClient({});
 const ddb = DynamoDBDocumentClient.from(client);
 const bedrock = new BedrockRuntimeClient({ region: "eu-west-1" });
 
-const TABLE = Resource.ResearchDataTable.name;
+const TABLE = Resource.ResearchData.name;
 const MODEL_ID = "anthropic.claude-3-sonnet-20240229-v1:0";
 
 // ============================================================================

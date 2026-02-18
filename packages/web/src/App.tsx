@@ -4,6 +4,7 @@ import { useAuth } from "./useAuth";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3002";
 const RESEARCH_URL = import.meta.env.VITE_RESEARCH_URL || `${API_URL}/research`;
+const AGENT_RUNNER_URL = import.meta.env.VITE_AGENT_RUNNER_URL || `${API_URL}/agent-run`;
 
 interface Startup {
   id: string;
@@ -226,17 +227,25 @@ function App() {
     setRunningAgent(agentId);
     setAgentRunResult(null);
     try {
-      const res = await fetch(`${API_URL}/agents/${agentId}/run`, {
+      // Use Function URL directly (bypasses API Gateway 30s timeout)
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 min
+      
+      const res = await fetch(AGENT_RUNNER_URL, {
         method: "POST",
         headers: getAuthHeaders(),
+        body: JSON.stringify({ agentId }),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
+      
       const data = await res.json();
-      setAgentRunResult({ agentId, result: data.result || data.message || "Complete" });
+      setAgentRunResult({ agentId, result: data.result || data.error || "Complete" });
       // Refresh agents (with their docs) and docs list
       fetchAgents();
       fetchDocs(docsAgentFilter || undefined);
     } catch (err) {
-      setAgentRunResult({ agentId, result: `Error: ${err}` });
+      setAgentRunResult({ agentId, result: `Error: ${err instanceof Error ? err.message : err}` });
     } finally {
       setRunningAgent(null);
     }

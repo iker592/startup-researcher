@@ -210,10 +210,10 @@ export default $config({
       ],
     });
 
-    // Agent Runner - Executes scheduled agents
+    // Agent Runner - Executes scheduled agents (Function URL bypasses 30s API GW limit)
     const agentRunnerFn = new sst.aws.Function("AgentRunnerFunction", {
       handler: "packages/gateway/src/handlers/agent-runner.handler",
-      link: [table],
+      link: [table, auth0Domain, auth0ClientId, auth0ClientSecret],
       timeout: "10 minutes",
       memory: "1024 MB",
       url: {
@@ -241,6 +241,7 @@ export default $config({
         VITE_API_URL: api.url,
         VITE_CHAT_URL: chatFn.url,
         VITE_RESEARCH_URL: researchFn.url,
+        VITE_AGENT_RUNNER_URL: agentRunnerFn.url,
         VITE_AUTH_URL: $interpolate`${api.url}/auth`,
       },
     });
