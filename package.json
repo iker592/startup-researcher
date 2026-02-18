@@ -1,25 +1,29 @@
 {
   "name": "startup-researcher",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "AI-powered pattern recognition for successful AI agent startups",
   "private": true,
+  "type": "module",
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
-    "dev": "bun run --filter '*' dev",
+    "dev": "sst dev",
+    "deploy": "sst deploy",
+    "remove": "sst remove",
     "build": "bun run --filter '*' build",
-    "test": "bun run --filter '*' test",
-    "gateway:dev": "bun run --filter gateway dev",
-    "db:migrate": "bun run --filter db migrate",
-    "db:seed": "bun run --filter db seed",
-    "agent:collector": "bun run --filter agents collector",
-    "agent:enricher": "bun run --filter agents enricher",
-    "agent:analyst": "bun run --filter agents analyst"
+    "test": "bun run --filter '*' test"
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "typescript": "^5.3.0"
+    "sst": "^3.0.0",
+    "typescript": "^5.3.0",
+    "aws-cdk-lib": "^2.150.0",
+    "constructs": "^10.3.0"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.0.0",
+    "@aws-sdk/lib-dynamodb": "^3.0.0"
   },
   "author": "Iker & Pandulu",
   "license": "MIT"
