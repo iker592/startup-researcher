@@ -9,6 +9,7 @@ interface Startup {
   website?: string;
   industries?: string[];
   status?: string;
+  source?: string;
   createdAt?: string;
 }
 
@@ -18,19 +19,29 @@ interface Message {
   content: string;
 }
 
+interface ResearchResult {
+  success: boolean;
+  startupsFound: string[];
+  count: number;
+  summary: string;
+}
+
 function App() {
-  const [activeTab, setActiveTab] = useState<"chat" | "startups">("chat");
+  const [activeTab, setActiveTab] = useState<"chat" | "startups" | "research">("chat");
   const [startups, setStartups] = useState<Startup[]>([]);
   const [loading, setLoading] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
     {
       id: "1",
       role: "system",
-      content: "👋 I'm your Startup Research Agent. Ask me to research startups, find patterns, or query the database!",
+      content: "👋 I'm your Startup Research Agent. Ask me about startups in the database, funding rounds, or patterns!",
     },
   ]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [researchTopic, setResearchTopic] = useState("");
+  const [researching, setResearching] = useState(false);
+  const [researchResult, setResearchResult] = useState<ResearchResult | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Fetch startups when tab changes
@@ -72,106 +83,69 @@ function App() {
     setSending(true);
 
     try {
-      // Call agent endpoint (this would connect to your agent)
       const res = await fetch(`${API_URL}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: input }),
       });
 
-      if (res.ok) {
-        const data = await res.json();
-        const assistantMessage: Message = {
-          id: (Date.now() + 1).toString(),
-          role: "assistant",
-          content: data.response || data.message || "I processed your request.",
-        };
-        setMessages((prev) => [...prev, assistantMessage]);
-      } else {
-        // If no agent endpoint, show a demo response
-        const demoMessage: Message = {
-          id: (Date.now() + 1).toString(),
-          role: "assistant",
-          content: getDemoResponse(input),
-        };
-        setMessages((prev) => [...prev, demoMessage]);
+      const data = await res.json();
+      
+      if (data.error) {
+        throw new Error(data.error);
       }
-    } catch (err) {
-      // Demo mode - show what the agent would do
-      const demoMessage: Message = {
+
+      const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: getDemoResponse(input),
+        content: data.response || "I processed your request.",
       };
-      setMessages((prev) => [...prev, demoMessage]);
+      setMessages((prev) => [...prev, assistantMessage]);
+    } catch (err) {
+      const errorMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        role: "system",
+        content: `Error: ${err instanceof Error ? err.message : "Failed to send message"}`,
+      };
+      setMessages((prev) => [...prev, errorMessage]);
     } finally {
       setSending(false);
     }
   };
 
-  // Demo responses to show the concept
-  const getDemoResponse = (query: string): string => {
-    const q = query.toLowerCase();
-    
-    if (q.includes("research") || q.includes("find")) {
-      return `🔍 **Researching...**
+  const startResearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!researchTopic.trim() || researching) return;
 
-I would:
-1. Call \`web_scrape\` tool to search for startups matching your query
-2. Extract company info, funding data, team members
-3. Save to database using \`db_query\` tool
+    setResearching(true);
+    setResearchResult(null);
 
-\`\`\`json
-{
-  "tool": "db_query",
-  "operation": "insert",
-  "entity": "startup",
-  "data": { "name": "...", "description": "..." }
-}
-\`\`\`
+    try {
+      const res = await fetch(`${API_URL}/research`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic: researchTopic }),
+      });
 
-*Connect the agent endpoint to enable live research!*`;
+      const data = await res.json();
+      
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
+      setResearchResult(data);
+      // Refresh startups list
+      fetchStartups();
+    } catch (err) {
+      setResearchResult({
+        success: false,
+        startupsFound: [],
+        count: 0,
+        summary: `Error: ${err instanceof Error ? err.message : "Research failed"}`,
+      });
+    } finally {
+      setResearching(false);
     }
-    
-    if (q.includes("list") || q.includes("show") || q.includes("startups")) {
-      return `📊 **Querying database...**
-
-I would call:
-\`\`\`json
-{
-  "tool": "db_query",
-  "operation": "query",
-  "entity": "startup"
-}
-\`\`\`
-
-Check the **Startups** tab to see what's in the database!`;
-    }
-    
-    if (q.includes("pattern") || q.includes("analyze")) {
-      return `🧠 **Analyzing patterns...**
-
-I would:
-1. Query all startups: \`db_query\` with \`operation: "query"\`
-2. Analyze funding rounds, industries, team backgrounds
-3. Save patterns: \`db_query\` with \`entity: "pattern"\`
-
-Common patterns I look for:
-- Funding trajectory
-- Team composition
-- Industry focus
-- Go-to-market strategy`;
-    }
-    
-    return `I understand you want to: "${query}"
-
-I can help with:
-- 🔍 **Research startups** - "Research AI coding assistants"
-- 📊 **Query database** - "Show all startups in AI"
-- 🧠 **Analyze patterns** - "What patterns do successful startups share?"
-- 💰 **Funding data** - "Find recent Series A rounds"
-
-What would you like me to do?`;
   };
 
   return (
@@ -186,6 +160,12 @@ What would you like me to do?`;
             💬 Chat
           </button>
           <button
+            className={`tab ${activeTab === "research" ? "active" : ""}`}
+            onClick={() => setActiveTab("research")}
+          >
+            🤖 Research
+          </button>
+          <button
             className={`tab ${activeTab === "startups" ? "active" : ""}`}
             onClick={() => setActiveTab("startups")}
           >
@@ -194,28 +174,18 @@ What would you like me to do?`;
         </div>
       </div>
 
+      {/* Chat Tab */}
       {activeTab === "chat" && (
         <div className="chat-container">
           <div className="chat-messages">
             {messages.map((msg) => (
               <div key={msg.id} className={`message ${msg.role}`}>
-                {msg.content.split("\n").map((line, i) => (
-                  <span key={i}>
-                    {line.startsWith("```") ? (
-                      <pre>{line.replace(/```\w*/g, "")}</pre>
-                    ) : (
-                      <>
-                        {line}
-                        <br />
-                      </>
-                    )}
-                  </span>
-                ))}
+                <div style={{ whiteSpace: "pre-wrap" }}>{msg.content}</div>
               </div>
             ))}
             {sending && (
               <div className="message assistant">
-                <em>Thinking...</em>
+                <em>🤔 Thinking...</em>
               </div>
             )}
             <div ref={messagesEndRef} />
@@ -225,7 +195,7 @@ What would you like me to do?`;
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask me to research startups..."
+              placeholder="Ask about startups... (e.g., 'List all AI startups')"
               disabled={sending}
             />
             <button type="submit" disabled={sending || !input.trim()}>
@@ -235,6 +205,99 @@ What would you like me to do?`;
         </div>
       )}
 
+      {/* Research Tab */}
+      {activeTab === "research" && (
+        <div className="card">
+          <h2 style={{ marginBottom: 16 }}>🤖 Research Agent</h2>
+          <p style={{ color: "#666", marginBottom: 20 }}>
+            Enter a topic and the research agent will search the web, find relevant startups,
+            and save them to the database.
+          </p>
+          
+          <form onSubmit={startResearch} style={{ marginBottom: 24 }}>
+            <div className="form-row">
+              <input
+                type="text"
+                value={researchTopic}
+                onChange={(e) => setResearchTopic(e.target.value)}
+                placeholder="e.g., AI coding assistants, vertical SaaS, developer tools..."
+                disabled={researching}
+                style={{ flex: 2 }}
+              />
+              <button 
+                type="submit" 
+                className="btn btn-primary"
+                disabled={researching || !researchTopic.trim()}
+                style={{ minWidth: 150 }}
+              >
+                {researching ? "🔍 Researching..." : "🚀 Start Research"}
+              </button>
+            </div>
+          </form>
+
+          {researching && (
+            <div className="card" style={{ background: "#f0f9ff", textAlign: "center", padding: 40 }}>
+              <div style={{ fontSize: 48, marginBottom: 16 }}>🔍</div>
+              <h3>Research in Progress...</h3>
+              <p style={{ color: "#666" }}>
+                The agent is searching the web, extracting startup info, and saving to the database.
+                This may take 30-60 seconds.
+              </p>
+            </div>
+          )}
+
+          {researchResult && (
+            <div className="card" style={{ 
+              background: researchResult.success ? "#f0fdf4" : "#fef2f2" 
+            }}>
+              <h3 style={{ marginBottom: 12 }}>
+                {researchResult.success ? "✅ Research Complete!" : "❌ Research Failed"}
+              </h3>
+              
+              {researchResult.success && researchResult.startupsFound.length > 0 && (
+                <div style={{ marginBottom: 16 }}>
+                  <strong>Startups Found ({researchResult.count}):</strong>
+                  <ul style={{ marginTop: 8, paddingLeft: 20 }}>
+                    {researchResult.startupsFound.map((name, i) => (
+                      <li key={i}>{name}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              
+              <div>
+                <strong>Summary:</strong>
+                <p style={{ whiteSpace: "pre-wrap", marginTop: 8 }}>{researchResult.summary}</p>
+              </div>
+            </div>
+          )}
+
+          <div style={{ marginTop: 24, padding: 16, background: "#f9fafb", borderRadius: 8 }}>
+            <h4 style={{ marginBottom: 8 }}>💡 Research Ideas</h4>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {[
+                "AI coding assistants",
+                "Vertical SaaS for healthcare",
+                "Developer productivity tools",
+                "AI agents startups",
+                "No-code platforms",
+                "AI writing assistants",
+              ].map((idea) => (
+                <button
+                  key={idea}
+                  className="btn btn-secondary"
+                  onClick={() => setResearchTopic(idea)}
+                  style={{ fontSize: 13 }}
+                >
+                  {idea}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Startups Tab */}
       {activeTab === "startups" && (
         <>
           <div className="card">
@@ -259,7 +322,7 @@ What would you like me to do?`;
             <div className="empty">
               <p>No startups yet!</p>
               <p style={{ marginTop: 8, fontSize: 14 }}>
-                Ask the agent to research some startups in the Chat tab.
+                Go to the Research tab to find and add startups.
               </p>
             </div>
           ) : (
@@ -273,7 +336,7 @@ What would you like me to do?`;
                         href={startup.website}
                         target="_blank"
                         rel="noopener noreferrer"
-                        style={{ fontSize: 14, color: "#4f46e5" }}
+                        style={{ fontSize: 14, color: "#4f46e5", marginLeft: 8 }}
                       >
                         ↗
                       </a>
@@ -288,9 +351,9 @@ What would you like me to do?`;
                         {ind}
                       </span>
                     ))}
-                    {startup.status && (
+                    {startup.source === "research-agent" && (
                       <span className="tag" style={{ background: "#dbeafe", color: "#1e40af" }}>
-                        {startup.status}
+                        🤖 auto
                       </span>
                     )}
                   </div>

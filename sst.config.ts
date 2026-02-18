@@ -5,7 +5,7 @@
  * 
  * AI-powered startup pattern recognition system
  * - DynamoDB for startup data
- * - Lambda Gateway with research tools
+ * - AWS Bedrock (Claude) for AI agents
  * - React frontend with chat + startup browser
  * - Single-table design for flexibility
  */
@@ -29,10 +29,10 @@ export default $config({
     // ════════════════════════════════════════════════════════════════
     const table = new sst.aws.Dynamo("ResearchData", {
       fields: {
-        pk: "string",  // STARTUP#name, SOURCE#id, PATTERN#id
-        sk: "string",  // PROFILE, FUNDING#date, TEAM#id, META
-        gsi1pk: "string", // For queries by type: STARTUP, SOURCE, etc.
-        gsi1sk: "string", // For sorting: date, name, etc.
+        pk: "string",
+        sk: "string",
+        gsi1pk: "string",
+        gsi1sk: "string",
       },
       primaryIndex: { hashKey: "pk", rangeKey: "sk" },
       globalIndexes: {
@@ -62,7 +62,7 @@ export default $config({
       timeout: "30 seconds",
     });
 
-    // Direct DB operations (for convenience)
+    // Direct DB operations
     api.route("GET /startups", {
       handler: "packages/gateway/src/handlers/startups.list",
       link: [table],
@@ -78,11 +78,34 @@ export default $config({
       link: [table],
     });
 
-    // Chat endpoint (placeholder - connect to your agent)
+    // ════════════════════════════════════════════════════════════════
+    // 🤖 AI Agent Endpoints (using AWS Bedrock)
+    // ════════════════════════════════════════════════════════════════
+    
+    // Chat - Query agent (answers questions using DB)
     api.route("POST /chat", {
       handler: "packages/gateway/src/handlers/chat.handler",
       link: [table],
       timeout: "60 seconds",
+      permissions: [
+        {
+          actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+          resources: ["*"],
+        },
+      ],
+    });
+
+    // Research - Research agent (scrapes web, saves to DB)
+    api.route("POST /research", {
+      handler: "packages/gateway/src/handlers/research.handler",
+      link: [table],
+      timeout: "120 seconds",
+      permissions: [
+        {
+          actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+          resources: ["*"],
+        },
+      ],
     });
 
     // ════════════════════════════════════════════════════════════════
