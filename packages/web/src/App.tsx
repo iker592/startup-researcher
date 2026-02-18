@@ -245,7 +245,15 @@ function App() {
       fetchAgents();
       fetchDocs(docsAgentFilter || undefined);
     } catch (err) {
-      setAgentRunResult({ agentId, result: `Error: ${err instanceof Error ? err.message : err}` });
+      const errMsg = err instanceof Error ? err.message : String(err);
+      // Mobile Safari kills long requests - agent likely finished on backend
+      if (errMsg.includes("Load failed") || errMsg.includes("abort") || errMsg.includes("network")) {
+        setAgentRunResult({ agentId, result: "⏳ Agent may still be running... Refreshing docs in a moment." });
+        // Wait a bit then refresh to pick up any saved docs
+        setTimeout(() => { fetchAgents(); fetchDocs(docsAgentFilter || undefined); }, 5000);
+      } else {
+        setAgentRunResult({ agentId, result: `Error: ${errMsg}` });
+      }
     } finally {
       setRunningAgent(null);
     }
