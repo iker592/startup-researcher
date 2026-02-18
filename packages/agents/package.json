@@ -1,0 +1,15 @@
+{
+  "name": "agents",
+  "version": "0.1.0",
+  "description": "AI agent definitions for Startup Researcher",
+  "main": "src/index.ts",
+  "scripts": {
+    "collector": "bun run src/collector.ts",
+    "enricher": "bun run src/enricher.ts",
+    "analyst": "bun run src/analyst.ts",
+    "reporter": "bun run src/reporter.ts"
+  },
+  "dependencies": {
+    "openai": "^4.0.0"
+  }
+}

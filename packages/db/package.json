@@ -1,0 +1,20 @@
+{
+  "name": "db",
+  "version": "0.1.0",
+  "description": "Database schema and migrations for Startup Researcher",
+  "main": "src/index.ts",
+  "scripts": {
+    "migrate": "bun run src/migrate.ts",
+    "seed": "bun run src/seed.ts",
+    "generate": "drizzle-kit generate",
+    "studio": "drizzle-kit studio"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.29.0",
+    "pg": "^8.11.0"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.20.0",
+    "@types/pg": "^8.11.0"
+  }
+}

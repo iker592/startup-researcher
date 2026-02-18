@@ -1,0 +1,26 @@
+{
+  "name": "startup-researcher",
+  "version": "0.1.0",
+  "description": "AI-powered pattern recognition for successful AI agent startups",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "bun run --filter '*' dev",
+    "build": "bun run --filter '*' build",
+    "test": "bun run --filter '*' test",
+    "gateway:dev": "bun run --filter gateway dev",
+    "db:migrate": "bun run --filter db migrate",
+    "db:seed": "bun run --filter db seed",
+    "agent:collector": "bun run --filter agents collector",
+    "agent:enricher": "bun run --filter agents enricher",
+    "agent:analyst": "bun run --filter agents analyst"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.3.0"
+  },
+  "author": "Iker & Pandulu",
+  "license": "MIT"
+}
