@@ -105,7 +105,8 @@ const scrapeTool: Tool = {
   }
 };
 
-const saveDocTool: Tool = {
+// Note: agentId is injected at runtime via createSaveDocTool
+const createSaveDocTool = (agentId: string, agentName: string): Tool => ({
   name: "save_doc",
   description: "Save a document to the database with title, tags, description, and content",
   inputSchema: {
@@ -124,6 +125,9 @@ const saveDocTool: Tool = {
     const id = `doc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const now = new Date().toISOString();
     
+    // Add agent name as a tag for easy filtering
+    const allTags = [...new Set([...tags, agentName])];
+    
     await ddb.send(new PutCommand({
       TableName: TABLE,
       Item: {
@@ -133,10 +137,12 @@ const saveDocTool: Tool = {
         gsi1sk: now,
         id,
         title,
-        tags,
+        tags: allTags,
         description,
         content,
         sourceUrl,
+        agentId,
+        agentName,
         createdAt: now,
         updatedAt: now,
         type: "doc"
@@ -145,9 +151,13 @@ const saveDocTool: Tool = {
     
     return `Document saved: "${title}" (id: ${id})`;
   }
-};
+});
 
-const TOOLS = [webSearchTool, scrapeTool, saveDocTool];
+const getTools = (agentId: string, agentName: string): Tool[] => [
+  webSearchTool, 
+  scrapeTool, 
+  createSaveDocTool(agentId, agentName)
+];
 
 // ============================================================================
 // Agent Runner
@@ -161,9 +171,12 @@ interface AgentConfig {
 }
 
 async function runAgent(config: AgentConfig, onToken?: (token: string) => void): Promise<string> {
-  const { prompt, userId } = config;
+  const { id, name, prompt, userId } = config;
   
-  const systemPrompt = `You are a research agent. Your job is to:
+  // Get tools with agent context for doc saving
+  const tools = getTools(id, name);
+  
+  const systemPrompt = `You are a research agent called "${name}". Your job is to:
 1. Search the web for information on the given topic
 2. Scrape relevant pages to gather details
 3. Save important findings as documents
@@ -178,7 +191,7 @@ Current task: ${prompt}`;
   ];
 
   const toolConfig = {
-    tools: TOOLS.map(t => ({
+    tools: tools.map(t => ({
       toolSpec: {
         name: t.name,
         description: t.description,
@@ -219,7 +232,7 @@ Current task: ${prompt}`;
       const toolResults: any[] = [];
       for (const item of toolUses) {
         const toolUse = item.toolUse;
-        const tool = TOOLS.find(t => t.name === toolUse.name);
+        const tool = tools.find(t => t.name === toolUse.name);
         
         if (tool) {
           if (onToken) onToken(`\n[Using tool: ${tool.name}]\n`);

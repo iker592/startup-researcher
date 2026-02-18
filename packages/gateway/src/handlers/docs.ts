@@ -44,6 +44,7 @@ export const list = async (event: any) => {
     const userId = normalizeEmail(user.email);
     const limit = parseInt(event.queryStringParameters?.limit || "50");
     const tag = event.queryStringParameters?.tag;
+    const agentId = event.queryStringParameters?.agentId;
     
     const result = await client.send(
       new QueryCommand({
@@ -57,6 +58,11 @@ export const list = async (event: any) => {
     );
 
     let docs = result.Items || [];
+    
+    // Filter by agentId if specified
+    if (agentId) {
+      docs = docs.filter((doc: any) => doc.agentId === agentId);
+    }
     
     // Filter by tag if specified
     if (tag) {

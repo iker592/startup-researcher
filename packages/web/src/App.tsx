@@ -35,6 +35,7 @@ interface Agent {
   enabled?: boolean;
   lastRun?: string;
   createdAt: string;
+  docs?: Doc[]; // Docs created by this agent
 }
 
 interface ResearchResult {
@@ -68,6 +69,7 @@ function App() {
   const [newAgentSchedule, setNewAgentSchedule] = useState("");
   const [runningAgent, setRunningAgent] = useState<string | null>(null);
   const [agentRunResult, setAgentRunResult] = useState<{ agentId: string; result: string } | null>(null);
+  const [docsAgentFilter, setDocsAgentFilter] = useState<string>("");
 
   // Helper to get auth headers
   const getAuthHeaders = (): HeadersInit => {
@@ -136,11 +138,12 @@ function App() {
   // ============================================================================
   // Docs
   // ============================================================================
-  const fetchDocs = async () => {
+  const fetchDocs = async (agentId?: string) => {
     if (!token) return;
     setDocsLoading(true);
     try {
-      const res = await fetch(`${API_URL}/docs`, { headers: getAuthHeaders() });
+      const filterParam = agentId ? `?agentId=${agentId}` : "";
+      const res = await fetch(`${API_URL}/docs${filterParam}`, { headers: getAuthHeaders() });
       const data = await res.json();
       setDocs(data.docs || []);
     } catch (err) {
@@ -170,7 +173,22 @@ function App() {
     try {
       const res = await fetch(`${API_URL}/agents`, { headers: getAuthHeaders() });
       const data = await res.json();
-      setAgents(data.agents || []);
+      const agentsList = data.agents || [];
+      
+      // Fetch docs for each agent
+      const agentsWithDocs = await Promise.all(
+        agentsList.map(async (agent: Agent) => {
+          try {
+            const docsRes = await fetch(`${API_URL}/docs?agentId=${agent.id}`, { headers: getAuthHeaders() });
+            const docsData = await docsRes.json();
+            return { ...agent, docs: docsData.docs || [] };
+          } catch {
+            return { ...agent, docs: [] };
+          }
+        })
+      );
+      
+      setAgents(agentsWithDocs);
     } catch (err) {
       console.error("Error fetching agents:", err);
     } finally {
@@ -214,8 +232,9 @@ function App() {
       });
       const data = await res.json();
       setAgentRunResult({ agentId, result: data.result || data.message || "Complete" });
-      // Refresh docs in case agent saved any
-      fetchDocs();
+      // Refresh agents (with their docs) and docs list
+      fetchAgents();
+      fetchDocs(docsAgentFilter || undefined);
     } catch (err) {
       setAgentRunResult({ agentId, result: `Error: ${err}` });
     } finally {
@@ -253,10 +272,10 @@ function App() {
           display: "flex", flexDirection: "column", justifyContent: "center", 
           alignItems: "center", minHeight: "60vh", gap: 24 
         }}>
-          <h1 style={{ margin: 0, fontSize: 48 }}>🔍</h1>
-          <h1 style={{ margin: 0 }}>Startup Researcher</h1>
+          <h1 style={{ margin: 0, fontSize: 48 }}>🏭</h1>
+          <h1 style={{ margin: 0 }}>FactoryBot</h1>
           <p style={{ color: "#666", textAlign: "center", maxWidth: 400 }}>
-            AI-powered startup research and analysis. Chat with your database, discover new startups, and track the market.
+            AI-powered research agents. Create bots that search, analyze, and save findings automatically.
           </p>
           <button className="btn btn-primary" onClick={login} style={{ padding: "12px 32px", fontSize: 16 }}>
             Login to Continue
@@ -270,7 +289,7 @@ function App() {
     <div className="container">
       <div className="header">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <h1 style={{ margin: 0 }}>🔍 Startup Researcher</h1>
+          <h1 style={{ margin: 0 }}>🏭 FactoryBot</h1>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             {user?.picture && (
               <img src={user.picture} alt={user.name || "User"} style={{ width: 32, height: 32, borderRadius: "50%" }} />
@@ -394,6 +413,39 @@ function App() {
                         <p style={{ whiteSpace: "pre-wrap", marginTop: 8, fontSize: 14 }}>{agentRunResult.result}</p>
                       </div>
                     )}
+                    
+                    {/* Agent's Docs */}
+                    {agent.docs && agent.docs.length > 0 && (
+                      <div style={{ marginTop: 12, borderTop: "1px solid #e5e7eb", paddingTop: 12 }}>
+                        <strong style={{ fontSize: 13 }}>📄 Documents ({agent.docs.length})</strong>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
+                          {agent.docs.slice(0, 5).map((doc) => (
+                            <div
+                              key={doc.id}
+                              onClick={() => { setSelectedDoc(doc); setActiveTab("docs"); }}
+                              style={{
+                                padding: 8,
+                                background: "#fff",
+                                borderRadius: 6,
+                                cursor: "pointer",
+                                border: "1px solid #e5e7eb",
+                                fontSize: 13,
+                              }}
+                            >
+                              <div style={{ fontWeight: 500 }}>{doc.title}</div>
+                              <div style={{ color: "#666", fontSize: 12 }}>
+                                {doc.description?.slice(0, 60)}{doc.description && doc.description.length > 60 ? "..." : ""}
+                              </div>
+                            </div>
+                          ))}
+                          {agent.docs.length > 5 && (
+                            <div style={{ fontSize: 12, color: "#666" }}>
+                              +{agent.docs.length - 5} more docs
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -411,7 +463,19 @@ function App() {
           <div className="card">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
               <h3 style={{ margin: 0 }}>📄 Documents ({docs.length})</h3>
-              <button className="btn btn-secondary" onClick={fetchDocs} style={{ fontSize: 13 }}>Refresh</button>
+              <div style={{ display: "flex", gap: 8 }}>
+                <select 
+                  value={docsAgentFilter} 
+                  onChange={(e) => { setDocsAgentFilter(e.target.value); fetchDocs(e.target.value || undefined); }}
+                  style={{ fontSize: 13, padding: "6px 10px" }}
+                >
+                  <option value="">All Agents</option>
+                  {agents.map(a => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </select>
+                <button className="btn btn-secondary" onClick={() => fetchDocs(docsAgentFilter || undefined)} style={{ fontSize: 13 }}>Refresh</button>
+              </div>
             </div>
             
             {docsLoading ? (
