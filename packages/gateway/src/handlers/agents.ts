@@ -484,17 +484,68 @@ export const run = async (event: any) => {
       };
     }
 
-    // TODO: Invoke AgentCore Runtime directly
-    // For now, return the agent info
+    const agent = existing.Item;
+    const body = JSON.parse(event.body || "{}");
+    const prompt = body.prompt || agent.prompt || `Research: ${agent.name}`;
+
+    // Invoke the agent runner Lambda via Function URL
+    // Note: In production, use Lambda invoke for internal calls
+    // For now, we run inline since we're in Lambda already
+    const { BedrockRuntimeClient, ConverseCommand } = await import("@aws-sdk/client-bedrock-runtime");
+    const bedrock = new BedrockRuntimeClient({ region: "eu-west-1" });
+    
+    const MODEL_ID = "anthropic.claude-3-sonnet-20240229-v1:0";
+    
+    // Simple inline agent execution for manual runs
+    const systemPrompt = `You are a research agent. Your job is to:
+1. Search the web for information on the given topic
+2. Analyze and summarize key findings
+3. Provide actionable insights
+
+Be thorough but concise. Focus on recent, relevant information.
+
+Research topic: ${prompt}`;
+
+    const response = await bedrock.send(new ConverseCommand({
+      modelId: MODEL_ID,
+      system: [{ text: systemPrompt }],
+      messages: [{ role: "user", content: [{ text: `Please research: ${prompt}` }] }],
+    }));
+
+    const result = (response.output?.message?.content?.[0] as any)?.text || "No results";
+
+    // Log the run
+    const runId = `run_${Date.now()}`;
+    await dbClient.send(
+      new PutCommand({
+        TableName: Resource.ResearchData.name,
+        Item: {
+          pk: `USER#${userId}#AGENT#${id}`,
+          sk: `RUN#${runId}`,
+          gsi1pk: `USER#${userId}#AGENTRUNS`,
+          gsi1sk: new Date().toISOString(),
+          runId,
+          agentId: id,
+          agentName: agent.name,
+          prompt,
+          result,
+          status: "completed",
+          createdAt: new Date().toISOString(),
+        },
+      })
+    );
+
     return {
       statusCode: 200,
       headers: corsHeaders(),
       body: JSON.stringify({
-        message: "Agent run triggered",
-        agent: existing.Item,
+        success: true,
+        runId,
+        result,
       }),
     };
   } catch (error) {
+    console.error("Agent run error:", error);
     return {
       statusCode: 500,
       headers: corsHeaders(),

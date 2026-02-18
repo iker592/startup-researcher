@@ -6,6 +6,11 @@
 
 declare module "sst" {
   export interface Resource {
+    "AgentRunnerFunction": {
+      "name": string
+      "type": "sst.aws.Function"
+      "url": string
+    }
     "Auth0ClientId": {
       "type": "sst.sst.Secret"
       "value": string

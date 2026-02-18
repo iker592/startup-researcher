@@ -122,6 +122,8 @@ export default $config({
     // ════════════════════════════════════════════════════════════════
     const agentsHandler = {
       link: [table, auth0Domain, auth0ClientId, auth0ClientSecret],
+      timeout: "5 minutes",
+      memory: "1024 MB",
       permissions: [
         {
           actions: [
@@ -134,6 +136,10 @@ export default $config({
         },
         {
           actions: ["iam:PassRole"],
+          resources: ["*"],
+        },
+        {
+          actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
           resources: ["*"],
         },
       ],
@@ -204,6 +210,24 @@ export default $config({
       ],
     });
 
+    // Agent Runner - Executes scheduled agents
+    const agentRunnerFn = new sst.aws.Function("AgentRunnerFunction", {
+      handler: "packages/gateway/src/handlers/agent-runner.handler",
+      link: [table],
+      timeout: "10 minutes",
+      memory: "1024 MB",
+      url: {
+        authorization: "none",
+        cors: true,
+      },
+      permissions: [
+        {
+          actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+          resources: ["*"],
+        },
+      ],
+    });
+
     // ════════════════════════════════════════════════════════════════
     // 🌐 Frontend (React + Vite)
     // ════════════════════════════════════════════════════════════════
@@ -227,6 +251,7 @@ export default $config({
       table: table.name,
       chatUrl: chatFn.url,
       researchUrl: researchFn.url,
+      agentRunnerUrl: agentRunnerFn.url,
     };
   },
 });
