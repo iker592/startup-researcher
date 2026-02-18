@@ -488,31 +488,15 @@ export const run = async (event: any) => {
     const body = JSON.parse(event.body || "{}");
     const prompt = body.prompt || agent.prompt || `Research: ${agent.name}`;
 
-    // Invoke the agent runner Lambda via Function URL
-    // Note: In production, use Lambda invoke for internal calls
-    // For now, we run inline since we're in Lambda already
-    const { BedrockRuntimeClient, ConverseCommand } = await import("@aws-sdk/client-bedrock-runtime");
-    const bedrock = new BedrockRuntimeClient({ region: "eu-west-1" });
+    // Use the full agent runner with tools (web_search, scrape, save_doc)
+    const { runAgentWithTools } = await import("./agent-runner-core");
     
-    const MODEL_ID = "anthropic.claude-3-sonnet-20240229-v1:0";
-    
-    // Simple inline agent execution for manual runs
-    const systemPrompt = `You are a research agent. Your job is to:
-1. Search the web for information on the given topic
-2. Analyze and summarize key findings
-3. Provide actionable insights
-
-Be thorough but concise. Focus on recent, relevant information.
-
-Research topic: ${prompt}`;
-
-    const response = await bedrock.send(new ConverseCommand({
-      modelId: MODEL_ID,
-      system: [{ text: systemPrompt }],
-      messages: [{ role: "user", content: [{ text: `Please research: ${prompt}` }] }],
-    }));
-
-    const result = (response.output?.message?.content?.[0] as any)?.text || "No results";
+    const result = await runAgentWithTools({
+      id,
+      name: agent.name,
+      prompt,
+      userId,
+    });
 
     // Log the run
     const runId = `run_${Date.now()}`;
