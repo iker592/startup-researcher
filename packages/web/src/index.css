@@ -236,13 +236,23 @@ body {
   flex-wrap: wrap;
 }
 
-.form-row input, .form-row select {
+.form-row input, .form-row select, input, textarea {
   flex: 1;
   min-width: 150px;
   padding: 10px 14px;
   border: 1px solid #ddd;
   border-radius: 8px;
   font-size: 14px;
+  font-family: inherit;
+}
+
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: #4f46e5;
+}
+
+textarea {
+  width: 100%;
 }
 
 .btn {
