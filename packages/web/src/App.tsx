@@ -308,11 +308,17 @@ function App() {
           </div>
         </div>
         <div className="tabs">
-          <button className={`tab ${activeTab === "chat" ? "active" : ""}`} onClick={() => setActiveTab("chat")}>💬 Chat</button>
-          <button className={`tab ${activeTab === "agents" ? "active" : ""}`} onClick={() => setActiveTab("agents")}>🤖 Agents</button>
-          <button className={`tab ${activeTab === "docs" ? "active" : ""}`} onClick={() => setActiveTab("docs")}>📄 Docs</button>
-          <button className={`tab ${activeTab === "research" ? "active" : ""}`} onClick={() => setActiveTab("research")}>🔬 Research</button>
-          <button className={`tab ${activeTab === "startups" ? "active" : ""}`} onClick={() => setActiveTab("startups")}>🚀 Startups</button>
+          <select
+            className="tab-select"
+            value={activeTab}
+            onChange={(e) => setActiveTab(e.target.value as any)}
+          >
+            <option value="chat">💬 Chat</option>
+            <option value="agents">🤖 Agents</option>
+            <option value="docs">📄 Docs</option>
+            <option value="research">🔬 Research</option>
+            <option value="startups">🚀 Startups</option>
+          </select>
         </div>
       </div>
 
