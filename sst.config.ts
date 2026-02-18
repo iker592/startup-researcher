@@ -6,6 +6,7 @@
  * AI-powered startup pattern recognition system
  * - DynamoDB for startup data
  * - Lambda Gateway with research tools
+ * - React frontend with chat + startup browser
  * - Single-table design for flexibility
  */
 
@@ -77,8 +78,30 @@ export default $config({
       link: [table],
     });
 
+    // Chat endpoint (placeholder - connect to your agent)
+    api.route("POST /chat", {
+      handler: "packages/gateway/src/handlers/chat.handler",
+      link: [table],
+      timeout: "60 seconds",
+    });
+
+    // ════════════════════════════════════════════════════════════════
+    // 🌐 Frontend (React + Vite)
+    // ════════════════════════════════════════════════════════════════
+    const site = new sst.aws.StaticSite("Site", {
+      path: "packages/web",
+      build: {
+        command: "bun run build",
+        output: "dist",
+      },
+      environment: {
+        VITE_API_URL: api.url,
+      },
+    });
+
     return {
       api: api.url,
+      site: site.url,
       table: table.name,
     };
   },

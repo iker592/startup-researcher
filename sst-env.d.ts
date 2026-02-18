@@ -14,6 +14,10 @@ declare module "sst" {
       "name": string
       "type": "sst.aws.Dynamo"
     }
+    "Site": {
+      "type": "sst.aws.StaticSite"
+      "url": string
+    }
   }
 }
 /// <reference path="sst-env.d.ts" />
