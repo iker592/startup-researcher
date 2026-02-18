@@ -1,6 +1,6 @@
 /**
  * Database Tool - DynamoDB Operations
- * Single-table design for startup research data
+ * Single-table design with USER SCOPING for multi-tenant data
  */
 
 import { Resource } from "sst";
@@ -24,6 +24,7 @@ export interface DbQueryParams {
   startupId?: string; // For related entities
   limit?: number;
   filters?: Record<string, unknown>;
+  userId?: string; // User email for scoping
 }
 
 export interface DbQueryResult {
@@ -32,42 +33,48 @@ export interface DbQueryResult {
   items: Record<string, unknown>[];
 }
 
-// Entity key patterns
+// Normalize email for consistent key generation
+function normalizeEmail(email: string): string {
+  return email.toLowerCase().trim();
+}
+
+// User-scoped entity key patterns
+// Format: USER#{email}#ENTITY#{id}
 const keyPatterns = {
   startup: {
-    pk: (id: string) => `STARTUP#${id}`,
+    pk: (id: string, userId?: string) => userId ? `USER#${normalizeEmail(userId)}#STARTUP#${id}` : `STARTUP#${id}`,
     sk: () => "PROFILE",
-    gsi1pk: () => "STARTUP",
+    gsi1pk: (userId?: string) => userId ? `USER#${normalizeEmail(userId)}#STARTUP` : "STARTUP",
     gsi1sk: (name: string) => name.toLowerCase(),
   },
   funding: {
-    pk: (startupId: string) => `STARTUP#${startupId}`,
+    pk: (startupId: string, userId?: string) => userId ? `USER#${normalizeEmail(userId)}#STARTUP#${startupId}` : `STARTUP#${startupId}`,
     sk: (id: string) => `FUNDING#${id}`,
-    gsi1pk: () => "FUNDING",
+    gsi1pk: (userId?: string) => userId ? `USER#${normalizeEmail(userId)}#FUNDING` : "FUNDING",
     gsi1sk: (date: string) => date,
   },
   team: {
-    pk: (startupId: string) => `STARTUP#${startupId}`,
+    pk: (startupId: string, userId?: string) => userId ? `USER#${normalizeEmail(userId)}#STARTUP#${startupId}` : `STARTUP#${startupId}`,
     sk: (id: string) => `TEAM#${id}`,
-    gsi1pk: () => "TEAM",
+    gsi1pk: (userId?: string) => userId ? `USER#${normalizeEmail(userId)}#TEAM` : "TEAM",
     gsi1sk: (name: string) => name.toLowerCase(),
   },
   source: {
-    pk: (id: string) => `SOURCE#${id}`,
+    pk: (id: string, userId?: string) => userId ? `USER#${normalizeEmail(userId)}#SOURCE#${id}` : `SOURCE#${id}`,
     sk: () => "META",
-    gsi1pk: (type: string) => `SOURCE#${type}`,
+    gsi1pk: (type: string, userId?: string) => userId ? `USER#${normalizeEmail(userId)}#SOURCE#${type}` : `SOURCE#${type}`,
     gsi1sk: (date: string) => date,
   },
   analysis: {
-    pk: (startupId: string) => `STARTUP#${startupId}`,
+    pk: (startupId: string, userId?: string) => userId ? `USER#${normalizeEmail(userId)}#STARTUP#${startupId}` : `STARTUP#${startupId}`,
     sk: (id: string) => `ANALYSIS#${id}`,
-    gsi1pk: (type: string) => `ANALYSIS#${type}`,
+    gsi1pk: (type: string, userId?: string) => userId ? `USER#${normalizeEmail(userId)}#ANALYSIS#${type}` : `ANALYSIS#${type}`,
     gsi1sk: (date: string) => date,
   },
   pattern: {
-    pk: (id: string) => `PATTERN#${id}`,
+    pk: (id: string, userId?: string) => userId ? `USER#${normalizeEmail(userId)}#PATTERN#${id}` : `PATTERN#${id}`,
     sk: () => "META",
-    gsi1pk: (category: string) => `PATTERN#${category}`,
+    gsi1pk: (category: string, userId?: string) => userId ? `USER#${normalizeEmail(userId)}#PATTERN#${category}` : `PATTERN#${category}`,
     gsi1sk: (name: string) => name.toLowerCase(),
   },
 };
@@ -118,7 +125,8 @@ export const dbTool = {
 
   async execute(params: DbQueryParams): Promise<DbQueryResult> {
     const tableName = Resource.ResearchData.name;
-    console.log(`💾 DB ${params.operation}: ${params.entity}`);
+    const userId = params.userId;
+    console.log(`💾 DB ${params.operation}: ${params.entity} (user: ${userId || 'anonymous'})`);
 
     try {
       switch (params.operation) {
@@ -127,6 +135,7 @@ export const dbTool = {
         // ════════════════════════════════════════════════════════════
         case "insert": {
           if (!params.data) throw new Error("Insert requires data");
+          if (!userId) throw new Error("Insert requires userId for user-scoped data");
 
           const id = params.id || slugify((params.data.name as string) || Date.now().toString());
           const now = new Date().toISOString();
@@ -135,33 +144,34 @@ export const dbTool = {
           let item: Record<string, unknown> = {
             ...params.data,
             id,
+            userId: normalizeEmail(userId),
             entityType: params.entity,
             createdAt: now,
             updatedAt: now,
           };
 
-          // Set keys based on entity type
+          // Set keys based on entity type (all user-scoped)
           if (params.entity === "startup") {
-            item.pk = keys.pk(id);
+            item.pk = keys.pk(id, userId);
             item.sk = keys.sk();
-            item.gsi1pk = keys.gsi1pk();
+            item.gsi1pk = keys.gsi1pk(userId);
             item.gsi1sk = keys.gsi1sk(params.data.name as string || id);
           } else if (["funding", "team", "analysis"].includes(params.entity)) {
             if (!params.startupId) throw new Error(`${params.entity} requires startupId`);
-            item.pk = keys.pk(params.startupId);
+            item.pk = keys.pk(params.startupId, userId);
             item.sk = keys.sk(id);
-            item.gsi1pk = keys.gsi1pk();
+            item.gsi1pk = keys.gsi1pk(userId);
             item.gsi1sk = keys.gsi1sk(params.data.date as string || now);
             item.startupId = params.startupId;
           } else if (params.entity === "source") {
-            item.pk = keys.pk(id);
+            item.pk = keys.pk(id, userId);
             item.sk = keys.sk();
-            item.gsi1pk = keys.gsi1pk(params.data.sourceType as string || "unknown");
+            item.gsi1pk = keys.gsi1pk(params.data.sourceType as string || "unknown", userId);
             item.gsi1sk = keys.gsi1sk(params.data.publishedAt as string || now);
           } else if (params.entity === "pattern") {
-            item.pk = keys.pk(id);
+            item.pk = keys.pk(id, userId);
             item.sk = keys.sk();
-            item.gsi1pk = keys.gsi1pk(params.data.category as string || "general");
+            item.gsi1pk = keys.gsi1pk(params.data.category as string || "general", userId);
             item.gsi1sk = keys.gsi1sk(params.data.name as string || id);
           }
 
@@ -176,19 +186,22 @@ export const dbTool = {
         }
 
         // ════════════════════════════════════════════════════════════
-        // QUERY - List entities
+        // QUERY - List entities (user-scoped)
         // ════════════════════════════════════════════════════════════
         case "query": {
+          if (!userId) throw new Error("Query requires userId for user-scoped data");
+          
           let result;
+          const keys = keyPatterns[params.entity];
 
           if (params.entity === "startup") {
-            // Query all startups via GSI
+            // Query user's startups via GSI
             result = await client.send(
               new QueryCommand({
                 TableName: tableName,
                 IndexName: "gsi1",
                 KeyConditionExpression: "gsi1pk = :pk",
-                ExpressionAttributeValues: { ":pk": "STARTUP" },
+                ExpressionAttributeValues: { ":pk": keys.gsi1pk(userId) },
                 Limit: params.limit || 100,
               })
             );
@@ -200,19 +213,22 @@ export const dbTool = {
                 TableName: tableName,
                 KeyConditionExpression: "pk = :pk AND begins_with(sk, :sk)",
                 ExpressionAttributeValues: {
-                  ":pk": `STARTUP#${params.startupId}`,
+                  ":pk": keys.pk(params.startupId, userId),
                   ":sk": `${prefix}#`,
                 },
                 Limit: params.limit || 100,
               })
             );
           } else {
-            // Query by entity type GSI
-            const gsi1pk = params.entity === "source" 
-              ? `SOURCE#${params.filters?.sourceType || "article"}`
-              : params.entity === "pattern"
-              ? `PATTERN#${params.filters?.category || "success_factor"}`
-              : params.entity.toUpperCase();
+            // Query by entity type GSI (user-scoped)
+            let gsi1pk: string;
+            if (params.entity === "source") {
+              gsi1pk = `USER#${normalizeEmail(userId)}#SOURCE#${params.filters?.sourceType || "article"}`;
+            } else if (params.entity === "pattern") {
+              gsi1pk = `USER#${normalizeEmail(userId)}#PATTERN#${params.filters?.category || "success_factor"}`;
+            } else {
+              gsi1pk = keys.gsi1pk(userId);
+            }
               
             result = await client.send(
               new QueryCommand({
@@ -233,23 +249,24 @@ export const dbTool = {
         }
 
         // ════════════════════════════════════════════════════════════
-        // GET - Single entity
+        // GET - Single entity (user-scoped)
         // ════════════════════════════════════════════════════════════
         case "get": {
           if (!params.id) throw new Error("Get requires id");
+          if (!userId) throw new Error("Get requires userId for user-scoped data");
 
           const keys = keyPatterns[params.entity];
           let pk: string, sk: string;
 
           if (params.entity === "startup") {
-            pk = keys.pk(params.id);
+            pk = keys.pk(params.id, userId);
             sk = keys.sk();
           } else if (["funding", "team", "analysis"].includes(params.entity)) {
             if (!params.startupId) throw new Error(`Get ${params.entity} requires startupId`);
-            pk = keys.pk(params.startupId);
+            pk = keys.pk(params.startupId, userId);
             sk = keys.sk(params.id);
           } else {
-            pk = keys.pk(params.id);
+            pk = keys.pk(params.id, userId);
             sk = keys.sk();
           }
 
@@ -268,24 +285,25 @@ export const dbTool = {
         }
 
         // ════════════════════════════════════════════════════════════
-        // UPDATE
+        // UPDATE (user-scoped)
         // ════════════════════════════════════════════════════════════
         case "update": {
           if (!params.id) throw new Error("Update requires id");
           if (!params.data) throw new Error("Update requires data");
+          if (!userId) throw new Error("Update requires userId for user-scoped data");
 
           const keys = keyPatterns[params.entity];
           let pk: string, sk: string;
 
           if (params.entity === "startup") {
-            pk = keys.pk(params.id);
+            pk = keys.pk(params.id, userId);
             sk = keys.sk();
           } else if (["funding", "team", "analysis"].includes(params.entity)) {
             if (!params.startupId) throw new Error(`Update ${params.entity} requires startupId`);
-            pk = keys.pk(params.startupId);
+            pk = keys.pk(params.startupId, userId);
             sk = keys.sk(params.id);
           } else {
-            pk = keys.pk(params.id);
+            pk = keys.pk(params.id, userId);
             sk = keys.sk();
           }
 
@@ -319,23 +337,24 @@ export const dbTool = {
         }
 
         // ════════════════════════════════════════════════════════════
-        // DELETE
+        // DELETE (user-scoped)
         // ════════════════════════════════════════════════════════════
         case "delete": {
           if (!params.id) throw new Error("Delete requires id");
+          if (!userId) throw new Error("Delete requires userId for user-scoped data");
 
           const keys = keyPatterns[params.entity];
           let pk: string, sk: string;
 
           if (params.entity === "startup") {
-            pk = keys.pk(params.id);
+            pk = keys.pk(params.id, userId);
             sk = keys.sk();
           } else if (["funding", "team", "analysis"].includes(params.entity)) {
             if (!params.startupId) throw new Error(`Delete ${params.entity} requires startupId`);
-            pk = keys.pk(params.startupId);
+            pk = keys.pk(params.startupId, userId);
             sk = keys.sk(params.id);
           } else {
-            pk = keys.pk(params.id);
+            pk = keys.pk(params.id, userId);
             sk = keys.sk();
           }
 

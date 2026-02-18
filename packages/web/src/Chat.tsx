@@ -13,6 +13,10 @@ import { useState, useRef, useEffect, useCallback } from "react";
 // Use Function URL for streaming (bypasses API Gateway limits)
 const CHAT_URL = import.meta.env.VITE_CHAT_URL || `${import.meta.env.VITE_API_URL || "http://localhost:3002"}/chat`;
 
+interface ChatProps {
+  token?: string | null;
+}
+
 // Content can be text or tool calls - rendered inline in order
 type ContentSegment = 
   | { type: "text"; text: string }
@@ -181,7 +185,7 @@ interface AGUIEvent {
 // 🚀 MAIN CHAT COMPONENT
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export function Chat() {
+export function Chat({ token }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: "welcome",
@@ -247,9 +251,14 @@ Try:
     };
 
     try {
+      const headers: HeadersInit = { "Content-Type": "application/json" };
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
+      
       const response = await fetch(CHAT_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ message: userMessage }),
       });
 

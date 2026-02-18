@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { Chat } from "./Chat";
+import { useAuth } from "./useAuth";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3002";
 // Use Function URL for research (bypasses API Gateway 30s timeout)
@@ -24,6 +25,7 @@ interface ResearchResult {
 }
 
 function App() {
+  const { user, token, loading: authLoading, isAuthenticated, login, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<"chat" | "startups" | "research">("chat");
   const [startups, setStartups] = useState<Startup[]>([]);
   const [loading, setLoading] = useState(false);
@@ -31,17 +33,30 @@ function App() {
   const [researching, setResearching] = useState(false);
   const [researchResult, setResearchResult] = useState<ResearchResult | null>(null);
 
-  // Fetch startups when tab changes
+  // Helper to get auth headers
+  const getAuthHeaders = (): HeadersInit => {
+    const headers: HeadersInit = { "Content-Type": "application/json" };
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+    return headers;
+  };
+
+  // Fetch startups when tab changes (only if authenticated)
   useEffect(() => {
-    if (activeTab === "startups") {
+    if (activeTab === "startups" && isAuthenticated) {
       fetchStartups();
     }
-  }, [activeTab]);
+  }, [activeTab, isAuthenticated]);
 
   const fetchStartups = async () => {
+    if (!token) return;
+    
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/startups`);
+      const res = await fetch(`${API_URL}/startups`, {
+        headers: getAuthHeaders(),
+      });
       const data = await res.json();
       setStartups(data.startups || []);
     } catch (err) {
@@ -53,7 +68,7 @@ function App() {
 
   const startResearch = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!researchTopic.trim() || researching) return;
+    if (!researchTopic.trim() || researching || !token) return;
 
     setResearching(true);
     setResearchResult(null);
@@ -65,7 +80,7 @@ function App() {
       
       const res = await fetch(RESEARCH_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ topic: researchTopic }),
         signal: controller.signal,
       });
@@ -93,10 +108,60 @@ function App() {
     }
   };
 
+  // Show login screen when not authenticated
+  if (authLoading) {
+    return (
+      <div className="container">
+        <div style={{ display: "flex", justifyContent: "center", alignItems: "center", minHeight: "50vh" }}>
+          <span style={{ color: "#666", fontSize: 18 }}>Loading...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <div className="container">
+        <div style={{ 
+          display: "flex", 
+          flexDirection: "column", 
+          justifyContent: "center", 
+          alignItems: "center", 
+          minHeight: "60vh",
+          gap: 24 
+        }}>
+          <h1 style={{ margin: 0, fontSize: 48 }}>🔍</h1>
+          <h1 style={{ margin: 0 }}>Startup Researcher</h1>
+          <p style={{ color: "#666", textAlign: "center", maxWidth: 400 }}>
+            AI-powered startup research and analysis. Chat with your database, discover new startups, and track the market.
+          </p>
+          <button className="btn btn-primary" onClick={login} style={{ padding: "12px 32px", fontSize: 16 }}>
+            Login to Continue
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="container">
       <div className="header">
-        <h1>🔍 Startup Researcher</h1>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <h1 style={{ margin: 0 }}>🔍 Startup Researcher</h1>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            {user?.picture && (
+              <img 
+                src={user.picture} 
+                alt={user.name || "User"} 
+                style={{ width: 32, height: 32, borderRadius: "50%" }} 
+              />
+            )}
+            <span>{user?.name || user?.email}</span>
+            <button className="btn btn-secondary" onClick={logout} style={{ padding: "6px 12px", fontSize: 13 }}>
+              Logout
+            </button>
+          </div>
+        </div>
         <div className="tabs">
           <button
             className={`tab ${activeTab === "chat" ? "active" : ""}`}
@@ -114,13 +179,13 @@ function App() {
             className={`tab ${activeTab === "startups" ? "active" : ""}`}
             onClick={() => setActiveTab("startups")}
           >
-            🚀 Startups ({startups.length})
+            🚀 Startups
           </button>
         </div>
       </div>
 
       {/* Chat Tab - AG-UI Streaming */}
-      {activeTab === "chat" && <Chat />}
+      {activeTab === "chat" && <Chat token={token} />}
 
       {/* Research Tab */}
       {activeTab === "research" && (

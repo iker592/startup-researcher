@@ -1,5 +1,6 @@
 /**
- * Startup CRUD handlers
+ * Startup CRUD handlers - USER-SCOPED
+ * All data is isolated per authenticated user
  */
 
 import { Resource } from "sst";
@@ -10,6 +11,7 @@ import {
   GetCommand,
   QueryCommand,
 } from "@aws-sdk/lib-dynamodb";
+import { getUserFromRequest } from "../utils/auth";
 
 const client = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 
@@ -20,6 +22,10 @@ function slugify(name: string): string {
     .replace(/^-|-$/g, "");
 }
 
+function normalizeEmail(email: string): string {
+  return email.toLowerCase().trim();
+}
+
 function corsHeaders() {
   return {
     "Content-Type": "application/json",
@@ -28,16 +34,29 @@ function corsHeaders() {
 }
 
 /**
- * GET /startups - List all startups
+ * GET /startups - List user's startups
  */
-export const list = async () => {
+export const list = async (event: any) => {
   try {
+    // Require authentication
+    const user = await getUserFromRequest(event);
+    if (!user) {
+      return {
+        statusCode: 401,
+        headers: corsHeaders(),
+        body: JSON.stringify({ error: "Authentication required" }),
+      };
+    }
+    
+    const normalizedUserId = normalizeEmail(user.email);
+    console.log(`📋 Listing startups for: ${user.email}`);
+    
     const result = await client.send(
       new QueryCommand({
         TableName: Resource.ResearchData.name,
         IndexName: "gsi1",
         KeyConditionExpression: "gsi1pk = :pk",
-        ExpressionAttributeValues: { ":pk": "STARTUP" },
+        ExpressionAttributeValues: { ":pk": `USER#${normalizedUserId}#STARTUP` },
         Limit: 100,
       })
     );
@@ -60,10 +79,21 @@ export const list = async () => {
 };
 
 /**
- * POST /startups - Create a startup
+ * POST /startups - Create a startup (user-scoped)
  */
 export const create = async (event: any) => {
   try {
+    // Require authentication
+    const user = await getUserFromRequest(event);
+    if (!user) {
+      return {
+        statusCode: 401,
+        headers: corsHeaders(),
+        body: JSON.stringify({ error: "Authentication required" }),
+      };
+    }
+    
+    const normalizedUserId = normalizeEmail(user.email);
     const body = JSON.parse(event.body || "{}");
     
     if (!body.name) {
@@ -78,11 +108,12 @@ export const create = async (event: any) => {
     const now = new Date().toISOString();
 
     const item = {
-      pk: `STARTUP#${id}`,
+      pk: `USER#${normalizedUserId}#STARTUP#${id}`,
       sk: "PROFILE",
-      gsi1pk: "STARTUP",
+      gsi1pk: `USER#${normalizedUserId}#STARTUP`,
       gsi1sk: body.name.toLowerCase(),
       id,
+      userId: normalizedUserId,
       entityType: "startup",
       name: body.name,
       description: body.description || null,
@@ -107,6 +138,8 @@ export const create = async (event: any) => {
       })
     );
 
+    console.log(`✅ Created startup "${body.name}" for ${user.email}`);
+
     return {
       statusCode: 201,
       headers: corsHeaders(),
@@ -122,10 +155,21 @@ export const create = async (event: any) => {
 };
 
 /**
- * GET /startups/:id - Get a single startup
+ * GET /startups/:id - Get a single startup (user-scoped)
  */
 export const get = async (event: any) => {
   try {
+    // Require authentication
+    const user = await getUserFromRequest(event);
+    if (!user) {
+      return {
+        statusCode: 401,
+        headers: corsHeaders(),
+        body: JSON.stringify({ error: "Authentication required" }),
+      };
+    }
+    
+    const normalizedUserId = normalizeEmail(user.email);
     const id = event.pathParameters?.id;
 
     if (!id) {
@@ -140,7 +184,7 @@ export const get = async (event: any) => {
       new GetCommand({
         TableName: Resource.ResearchData.name,
         Key: {
-          pk: `STARTUP#${id}`,
+          pk: `USER#${normalizedUserId}#STARTUP#${id}`,
           sk: "PROFILE",
         },
       })

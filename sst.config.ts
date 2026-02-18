@@ -25,6 +25,12 @@ export default $config({
   },
   async run() {
     // ════════════════════════════════════════════════════════════════
+    // 🔐 Auth0 Secrets (reusing from sst-starter)
+    // ════════════════════════════════════════════════════════════════
+    const auth0Domain = new sst.Secret("Auth0Domain");
+    const auth0ClientId = new sst.Secret("Auth0ClientId");
+    const auth0ClientSecret = new sst.Secret("Auth0ClientSecret");
+    // ════════════════════════════════════════════════════════════════
     // 🗄️ Database (DynamoDB - Single Table Design)
     // ════════════════════════════════════════════════════════════════
     const table = new sst.aws.Dynamo("ResearchData", {
@@ -78,6 +84,16 @@ export default $config({
       link: [table],
     });
 
+    // Auth routes - explicit paths for reliability
+    const authHandler = {
+      handler: "packages/gateway/src/handlers/auth.handler",
+      link: [table, auth0Domain, auth0ClientId, auth0ClientSecret],
+    };
+    api.route("GET /auth/authorize", authHandler);
+    api.route("GET /auth/callback", authHandler);
+    api.route("GET /auth/me", authHandler);
+    api.route("GET /auth/logout", authHandler);
+
     // ════════════════════════════════════════════════════════════════
     // 🤖 AI Agent Endpoints (Lambda Function URLs for streaming)
     // ════════════════════════════════════════════════════════════════
@@ -85,7 +101,7 @@ export default $config({
     // Chat - Query agent with streaming
     const chatFn = new sst.aws.Function("ChatFunction", {
       handler: "packages/gateway/src/handlers/chat.handler",
-      link: [table],
+      link: [table, auth0Domain, auth0ClientId, auth0ClientSecret],
       timeout: "5 minutes",
       memory: "1024 MB",
       url: {
@@ -104,7 +120,7 @@ export default $config({
     // Research - Research agent with streaming
     const researchFn = new sst.aws.Function("ResearchFunction", {
       handler: "packages/gateway/src/handlers/research.handler",
-      link: [table],
+      link: [table, auth0Domain, auth0ClientId, auth0ClientSecret],
       timeout: "10 minutes",
       memory: "1024 MB",
       url: {
@@ -132,6 +148,7 @@ export default $config({
         VITE_API_URL: api.url,
         VITE_CHAT_URL: chatFn.url,
         VITE_RESEARCH_URL: researchFn.url,
+        VITE_AUTH_URL: $interpolate`${api.url}/auth`,
       },
     });
 

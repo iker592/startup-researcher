@@ -6,6 +6,18 @@
 
 declare module "sst" {
   export interface Resource {
+    "Auth0ClientId": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "Auth0ClientSecret": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
+    "Auth0Domain": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "ChatFunction": {
       "name": string
       "type": "sst.aws.Function"

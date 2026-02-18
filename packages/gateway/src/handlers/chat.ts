@@ -3,6 +3,7 @@
  * Chat endpoint - Real agent with tools + AG-UI Streaming
  * Uses AWS Bedrock (Claude) with ConverseStream
  * Uses Lambda Response Streaming for real-time SSE delivery
+ * ALL DATA IS USER-SCOPED based on authenticated email
  */
 
 import { Resource } from "sst";
@@ -19,11 +20,17 @@ import {
   type Message,
   type Tool,
 } from "@aws-sdk/client-bedrock-runtime";
+import { getUserFromRequest } from "../utils/auth";
 
 const dbClient = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const bedrockClient = new BedrockRuntimeClient({ region: "eu-west-1" });
 
 const MODEL_ID = "anthropic.claude-3-sonnet-20240229-v1:0";
+
+// Helper to normalize email for key consistency
+function normalizeEmail(email: string): string {
+  return email.toLowerCase().trim();
+}
 
 // Tool definitions for Bedrock
 const tools: Tool[] = [
@@ -88,18 +95,20 @@ const tools: Tool[] = [
   },
 ];
 
-// Execute tools
-async function executeTool(name: string, input: any): Promise<string> {
+// Execute tools with user scoping
+async function executeTool(name: string, input: any, userId: string): Promise<string> {
   const tableName = Resource.ResearchData.name;
+  const normalizedUserId = normalizeEmail(userId);
 
   if (name === "db_query") {
     if (input.operation === "query" && input.entity === "startup") {
+      // Query only this user's startups
       const result = await dbClient.send(
         new QueryCommand({
           TableName: tableName,
           IndexName: "gsi1",
           KeyConditionExpression: "gsi1pk = :pk",
-          ExpressionAttributeValues: { ":pk": "STARTUP" },
+          ExpressionAttributeValues: { ":pk": `USER#${normalizedUserId}#STARTUP` },
           Limit: input.limit || 20,
         })
       );
@@ -115,10 +124,11 @@ async function executeTool(name: string, input: any): Promise<string> {
     }
 
     if (input.operation === "get" && input.id) {
+      // Get only from this user's data
       const result = await dbClient.send(
         new GetCommand({
           TableName: tableName,
-          Key: { pk: `STARTUP#${input.id}`, sk: "PROFILE" },
+          Key: { pk: `USER#${normalizedUserId}#STARTUP#${input.id}`, sk: "PROFILE" },
         })
       );
       return JSON.stringify(result.Item || { error: "Not found" });
@@ -130,7 +140,7 @@ async function executeTool(name: string, input: any): Promise<string> {
           TableName: tableName,
           KeyConditionExpression: "pk = :pk AND begins_with(sk, :sk)",
           ExpressionAttributeValues: {
-            ":pk": `STARTUP#${input.startupId}`,
+            ":pk": `USER#${normalizedUserId}#STARTUP#${input.startupId}`,
             ":sk": "FUNDING#",
           },
         })
@@ -149,11 +159,12 @@ async function executeTool(name: string, input: any): Promise<string> {
 
     if (input.entity === "startup") {
       const item = {
-        pk: `STARTUP#${id}`,
+        pk: `USER#${normalizedUserId}#STARTUP#${id}`,
         sk: "PROFILE",
-        gsi1pk: "STARTUP",
+        gsi1pk: `USER#${normalizedUserId}#STARTUP`,
         gsi1sk: (input.data.name || id).toLowerCase(),
         id,
+        userId: normalizedUserId,
         entityType: "startup",
         ...input.data,
         createdAt: now,
@@ -166,11 +177,12 @@ async function executeTool(name: string, input: any): Promise<string> {
     if (input.entity === "funding" && input.startupId) {
       const fundingId = Date.now().toString();
       const item = {
-        pk: `STARTUP#${input.startupId}`,
+        pk: `USER#${normalizedUserId}#STARTUP#${input.startupId}`,
         sk: `FUNDING#${fundingId}`,
-        gsi1pk: "FUNDING",
+        gsi1pk: `USER#${normalizedUserId}#FUNDING`,
         gsi1sk: input.data.date || now,
         id: fundingId,
+        userId: normalizedUserId,
         entityType: "funding",
         startupId: input.startupId,
         ...input.data,
@@ -204,23 +216,22 @@ function aguiEvent(type: string, data: Record<string, any> = {}): string {
 // Main handler with Lambda Response Streaming
 export const handler = awslambda.streamifyResponse(
   async (event: any, responseStream: any, _context: any) => {
+    // Note: CORS headers are handled by Lambda Function URL config
+    // Don't duplicate them here or browsers may reject the response
     const metadata = {
       statusCode: 200,
       headers: {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
         "Connection": "keep-alive",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
       },
     };
 
-    // Handle CORS preflight
+    // Handle CORS preflight (Function URL handles CORS, but just in case)
     if (event.requestContext?.http?.method === "OPTIONS") {
       responseStream = awslambda.HttpResponseStream.from(responseStream, { 
         statusCode: 200, 
-        headers: metadata.headers 
+        headers: { "Content-Type": "text/plain" }
       });
       responseStream.end();
       return;
@@ -229,6 +240,16 @@ export const handler = awslambda.streamifyResponse(
     responseStream = awslambda.HttpResponseStream.from(responseStream, metadata);
 
     try {
+      // Extract authenticated user
+      const user = await getUserFromRequest(event);
+      if (!user) {
+        responseStream.write(aguiEvent("RUN_ERROR", { error: "Authentication required. Please log in." }));
+        responseStream.end();
+        return;
+      }
+      
+      console.log(`🔐 Chat request from: ${user.email}`);
+      
       const body = JSON.parse(event.body || "{}");
       const userMessage = body.message;
 
@@ -315,7 +336,7 @@ export const handler = awslambda.streamifyResponse(
                 const toolResultContent: any[] = [];
                 for (const tc of pendingToolCalls) {
                   console.log(`🔧 Tool call: ${tc.name}`, JSON.stringify(tc.args));
-                  const result = await executeTool(tc.name, tc.args);
+                  const result = await executeTool(tc.name, tc.args, user.email);
                   console.log(`📦 Tool result:`, result.slice(0, 200));
                   
                   responseStream.write(aguiEvent("TOOL_CALL_RESULT", { toolCallId: tc.id, content: result }));

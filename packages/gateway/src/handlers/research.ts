@@ -1,6 +1,7 @@
 /**
  * Research endpoint - Triggers agent research team
  * Uses AWS Bedrock (Claude) to scrape web, extract info, save to DB
+ * ALL DATA IS USER-SCOPED based on authenticated email
  */
 
 import { Resource } from "sst";
@@ -13,11 +14,17 @@ import {
   type Tool,
   type ToolResultContentBlock,
 } from "@aws-sdk/client-bedrock-runtime";
+import { getUserFromRequest } from "../utils/auth";
 
 const dbClient = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const bedrockClient = new BedrockRuntimeClient({ region: "eu-west-1" });
 
 const MODEL_ID = "anthropic.claude-3-sonnet-20240229-v1:0";
+
+// Helper to normalize email
+function normalizeEmail(email: string): string {
+  return email.toLowerCase().trim();
+}
 
 // Tool definitions for Bedrock
 const tools: Tool[] = [
@@ -160,9 +167,10 @@ async function webScrape(url: string): Promise<string> {
   }
 }
 
-// Save startup to DB
-async function saveStartup(data: any): Promise<string> {
+// Save startup to DB (user-scoped)
+async function saveStartup(data: any, userId: string): Promise<string> {
   const tableName = Resource.ResearchData.name;
+  const normalizedUserId = normalizeEmail(userId);
   const id = data.name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
@@ -170,11 +178,12 @@ async function saveStartup(data: any): Promise<string> {
   const now = new Date().toISOString();
 
   const item = {
-    pk: `STARTUP#${id}`,
+    pk: `USER#${normalizedUserId}#STARTUP#${id}`,
     sk: "PROFILE",
-    gsi1pk: "STARTUP",
+    gsi1pk: `USER#${normalizedUserId}#STARTUP`,
     gsi1sk: data.name.toLowerCase(),
     id,
+    userId: normalizedUserId,
     entityType: "startup",
     name: data.name,
     description: data.description,
@@ -192,11 +201,12 @@ async function saveStartup(data: any): Promise<string> {
 
   if (data.funding && data.funding.amountUsd) {
     const fundingItem = {
-      pk: `STARTUP#${id}`,
+      pk: `USER#${normalizedUserId}#STARTUP#${id}`,
       sk: `FUNDING#${Date.now()}`,
-      gsi1pk: "FUNDING",
+      gsi1pk: `USER#${normalizedUserId}#FUNDING`,
       gsi1sk: data.funding.date || now,
       id: Date.now().toString(),
+      userId: normalizedUserId,
       entityType: "funding",
       startupId: id,
       roundType: data.funding.roundType,
@@ -211,19 +221,22 @@ async function saveStartup(data: any): Promise<string> {
   return JSON.stringify({ success: true, id, name: data.name });
 }
 
-// Execute tools
-async function executeTool(name: string, input: any): Promise<string> {
+// Execute tools (with userId for save operations)
+async function executeTool(name: string, input: any, userId?: string): Promise<string> {
   console.log(`🔧 Research tool: ${name}`, JSON.stringify(input).slice(0, 200));
 
   if (name === "web_search") return webSearch(input.query);
   if (name === "web_scrape") return webScrape(input.url);
-  if (name === "save_startup") return saveStartup(input);
+  if (name === "save_startup") {
+    if (!userId) return JSON.stringify({ error: "User ID required for save operations" });
+    return saveStartup(input, userId);
+  }
   
   return JSON.stringify({ error: `Unknown tool: ${name}` });
 }
 
-// Run research agent with Bedrock
-async function runResearch(topic: string): Promise<{ startups: string[]; summary: string }> {
+// Run research agent with Bedrock (user-scoped)
+async function runResearch(topic: string, userId: string): Promise<{ startups: string[]; summary: string }> {
   const messages: Message[] = [
     {
       role: "user",
@@ -279,7 +292,7 @@ Save 2-3 startups maximum. Speed over completeness.`;
     for (const block of contentBlocks) {
       if (block.toolUse) {
         const { toolUseId, name, input } = block.toolUse;
-        const result = await executeTool(name!, input as any);
+        const result = await executeTool(name!, input as any, userId);
 
         if (name === "save_startup") {
           const parsed = JSON.parse(result);
@@ -319,36 +332,45 @@ Save 2-3 startups maximum. Speed over completeness.`;
 }
 
 export const handler = async (event: any) => {
-  const corsHeaders = {
+  // Note: CORS headers are handled by Lambda Function URL config
+  // Don't duplicate them here or browsers may reject the response
+  const headers = {
     "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
   };
 
   if (event.requestContext?.http?.method === "OPTIONS") {
-    return { statusCode: 200, headers: corsHeaders, body: "" };
+    return { statusCode: 200, headers, body: "" };
   }
 
   try {
+    // Require authentication
+    const user = await getUserFromRequest(event);
+    if (!user) {
+      return {
+        statusCode: 401,
+        headers,
+        body: JSON.stringify({ error: "Authentication required" }),
+      };
+    }
+    
     const body = JSON.parse(event.body || "{}");
     const topic = body.topic;
 
     if (!topic) {
       return {
         statusCode: 400,
-        headers: corsHeaders,
+        headers: headers,
         body: JSON.stringify({ error: "topic is required" }),
       };
     }
 
-    console.log(`🔍 Starting research: ${topic}`);
-    const result = await runResearch(topic);
-    console.log(`✅ Research complete: ${result.startups.length} startups saved`);
+    console.log(`🔍 Starting research for ${user.email}: ${topic}`);
+    const result = await runResearch(topic, user.email);
+    console.log(`✅ Research complete for ${user.email}: ${result.startups.length} startups saved`);
 
     return {
       statusCode: 200,
-      headers: corsHeaders,
+      headers: headers,
       body: JSON.stringify({
         success: true,
         startupsFound: result.startups,
@@ -360,7 +382,7 @@ export const handler = async (event: any) => {
     console.error("Research error:", error);
     return {
       statusCode: 500,
-      headers: corsHeaders,
+      headers: headers,
       body: JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
     };
   }
