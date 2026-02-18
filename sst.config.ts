@@ -68,20 +68,20 @@ export default $config({
       timeout: "30 seconds",
     });
 
-    // Direct DB operations
+    // Direct DB operations (need auth secrets for user validation)
     api.route("GET /startups", {
       handler: "packages/gateway/src/handlers/startups.list",
-      link: [table],
+      link: [table, auth0Domain, auth0ClientId, auth0ClientSecret],
     });
 
     api.route("POST /startups", {
       handler: "packages/gateway/src/handlers/startups.create",
-      link: [table],
+      link: [table, auth0Domain, auth0ClientId, auth0ClientSecret],
     });
 
     api.route("GET /startups/{id}", {
       handler: "packages/gateway/src/handlers/startups.get",
-      link: [table],
+      link: [table, auth0Domain, auth0ClientId, auth0ClientSecret],
     });
 
     // Auth routes - explicit paths for reliability
@@ -93,6 +93,75 @@ export default $config({
     api.route("GET /auth/callback", authHandler);
     api.route("GET /auth/me", authHandler);
     api.route("GET /auth/logout", authHandler);
+
+    // ════════════════════════════════════════════════════════════════
+    // 📄 Docs API (generic document storage)
+    // ════════════════════════════════════════════════════════════════
+    const docsHandler = {
+      link: [table, auth0Domain, auth0ClientId, auth0ClientSecret],
+    };
+    api.route("GET /docs", {
+      handler: "packages/gateway/src/handlers/docs.list",
+      ...docsHandler,
+    });
+    api.route("GET /docs/tags", {
+      handler: "packages/gateway/src/handlers/docs.tags",
+      ...docsHandler,
+    });
+    api.route("GET /docs/{id}", {
+      handler: "packages/gateway/src/handlers/docs.get",
+      ...docsHandler,
+    });
+    api.route("DELETE /docs/{id}", {
+      handler: "packages/gateway/src/handlers/docs.remove",
+      ...docsHandler,
+    });
+
+    // ════════════════════════════════════════════════════════════════
+    // 🤖 Scheduled Agents API
+    // ════════════════════════════════════════════════════════════════
+    const agentsHandler = {
+      link: [table, auth0Domain, auth0ClientId, auth0ClientSecret],
+      permissions: [
+        {
+          actions: [
+            "scheduler:CreateSchedule",
+            "scheduler:UpdateSchedule", 
+            "scheduler:DeleteSchedule",
+            "scheduler:GetSchedule",
+          ],
+          resources: ["*"],
+        },
+        {
+          actions: ["iam:PassRole"],
+          resources: ["*"],
+        },
+      ],
+    };
+    api.route("GET /agents", {
+      handler: "packages/gateway/src/handlers/agents.list",
+      ...agentsHandler,
+    });
+    api.route("POST /agents", {
+      handler: "packages/gateway/src/handlers/agents.create",
+      ...agentsHandler,
+    });
+    api.route("GET /agents/{id}", {
+      handler: "packages/gateway/src/handlers/agents.get",
+      ...agentsHandler,
+    });
+    api.route("PUT /agents/{id}", {
+      handler: "packages/gateway/src/handlers/agents.update",
+      ...agentsHandler,
+    });
+    api.route("DELETE /agents/{id}", {
+      handler: "packages/gateway/src/handlers/agents.remove",
+      ...agentsHandler,
+    });
+    api.route("POST /agents/{id}/run", {
+      handler: "packages/gateway/src/handlers/agents.run",
+      ...agentsHandler,
+    });
 
     // ════════════════════════════════════════════════════════════════
     // 🤖 AI Agent Endpoints (Lambda Function URLs for streaming)
