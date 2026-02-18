@@ -237,28 +237,25 @@ Find and save 3-5 relevant startups to the database. For each one, get their nam
     },
   ];
 
-  const systemPrompt = `You are a startup research agent. Your job is to find and catalog startups in a specific domain.
+  const systemPrompt = `You are a fast startup research agent. Find and save startups quickly.
 
-WORKFLOW:
-1. Use web_search to find relevant startups
-2. Use web_scrape to get details from company websites or articles
-3. Use save_startup to save each startup you find to the database
+WORKFLOW (BE FAST - max 20 seconds):
+1. web_search once for startups
+2. save_startup immediately for 2-3 startups from search results (don't scrape each site)
+3. Done!
 
-For each startup, extract:
+For each startup, provide:
 - Name (required)
-- Description (required) - what they do, their product
-- Website URL
-- Industries/tags (e.g., ["ai", "developer-tools", "b2b"])
-- Founded date (year)
-- Headquarters location
-- Latest funding (if available): round type, amount, investors
+- Description (1-2 sentences from search snippet)
+- Website URL (from search result)
+- Industries (2-3 tags)
 
-Research thoroughly. Find at least 3-5 startups per query.
-Be accurate - only save verified information.`;
+IMPORTANT: Do NOT scrape individual websites. Use info from search results only.
+Save 2-3 startups maximum. Speed over completeness.`;
 
   const savedStartups: string[] = [];
   let iterations = 0;
-  const maxIterations = 10;
+  const maxIterations = 5; // Keep it fast
 
   let response = await bedrockClient.send(
     new ConverseCommand({

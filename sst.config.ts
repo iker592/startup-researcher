@@ -41,7 +41,7 @@ export default $config({
     });
 
     // ════════════════════════════════════════════════════════════════
-    // 🔧 Research Gateway API
+    // 🔧 Research Gateway API (for non-streaming endpoints)
     // ════════════════════════════════════════════════════════════════
     const api = new sst.aws.ApiGatewayV2("ResearchApi");
 
@@ -79,27 +79,38 @@ export default $config({
     });
 
     // ════════════════════════════════════════════════════════════════
-    // 🤖 AI Agent Endpoints (using AWS Bedrock)
+    // 🤖 AI Agent Endpoints (Lambda Function URLs for streaming)
     // ════════════════════════════════════════════════════════════════
     
-    // Chat - Query agent (answers questions using DB)
-    api.route("POST /chat", {
+    // Chat - Query agent with streaming
+    const chatFn = new sst.aws.Function("ChatFunction", {
       handler: "packages/gateway/src/handlers/chat.handler",
       link: [table],
-      timeout: "60 seconds",
+      timeout: "5 minutes",
+      memory: "1024 MB",
+      url: {
+        authorization: "none",
+        cors: true,
+      },
       permissions: [
         {
           actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
           resources: ["*"],
         },
       ],
+      streaming: true,
     });
 
-    // Research - Research agent (scrapes web, saves to DB)
-    api.route("POST /research", {
+    // Research - Research agent with streaming
+    const researchFn = new sst.aws.Function("ResearchFunction", {
       handler: "packages/gateway/src/handlers/research.handler",
       link: [table],
-      timeout: "120 seconds",
+      timeout: "10 minutes",
+      memory: "1024 MB",
+      url: {
+        authorization: "none",
+        cors: true,
+      },
       permissions: [
         {
           actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
@@ -119,6 +130,8 @@ export default $config({
       },
       environment: {
         VITE_API_URL: api.url,
+        VITE_CHAT_URL: chatFn.url,
+        VITE_RESEARCH_URL: researchFn.url,
       },
     });
 
@@ -126,6 +139,8 @@ export default $config({
       api: api.url,
       site: site.url,
       table: table.name,
+      chatUrl: chatFn.url,
+      researchUrl: researchFn.url,
     };
   },
 });

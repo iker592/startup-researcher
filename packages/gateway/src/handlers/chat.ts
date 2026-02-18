@@ -1,6 +1,8 @@
+/// <reference path="../lambda-streaming.d.ts" />
 /**
- * Chat endpoint - Real agent with tools
- * Uses AWS Bedrock (Claude) to process queries and call tools
+ * Chat endpoint - Real agent with tools + AG-UI Streaming
+ * Uses AWS Bedrock (Claude) with ConverseStream
+ * Uses Lambda Response Streaming for real-time SSE delivery
  */
 
 import { Resource } from "sst";
@@ -13,10 +15,9 @@ import {
 } from "@aws-sdk/lib-dynamodb";
 import {
   BedrockRuntimeClient,
-  ConverseCommand,
+  ConverseStreamCommand,
   type Message,
   type Tool,
-  type ToolResultContentBlock,
 } from "@aws-sdk/client-bedrock-runtime";
 
 const dbClient = DynamoDBDocumentClient.from(new DynamoDBClient({}));
@@ -185,13 +186,7 @@ async function executeTool(name: string, input: any): Promise<string> {
   return JSON.stringify({ error: `Unknown tool: ${name}` });
 }
 
-// Process message with Bedrock tool loop
-async function processMessage(userMessage: string): Promise<string> {
-  const messages: Message[] = [
-    { role: "user", content: [{ text: userMessage }] },
-  ];
-
-  const systemPrompt = `You are a startup research assistant. You help users query and analyze startup data from a database.
+const systemPrompt = `You are a startup research assistant. You help users query and analyze startup data from a database.
 
 Available data:
 - Startups: name, description, industries, website, status
@@ -201,99 +196,152 @@ When users ask about startups, use the db_query tool to fetch data.
 When presenting results, format them clearly with bullet points.
 Be concise but informative.`;
 
-  let response = await bedrockClient.send(
-    new ConverseCommand({
-      modelId: MODEL_ID,
-      system: [{ text: systemPrompt }],
-      messages,
-      toolConfig: { tools },
-    })
-  );
-
-  // Tool use loop
-  while (response.stopReason === "tool_use") {
-    const assistantMessage = response.output?.message;
-    if (assistantMessage) {
-      messages.push(assistantMessage);
-    }
-
-    // Execute tool calls
-    const toolResults: ToolResultContentBlock[] = [];
-    const contentBlocks = assistantMessage?.content || [];
-    
-    for (const block of contentBlocks) {
-      if (block.toolUse) {
-        const { toolUseId, name, input } = block.toolUse;
-        console.log(`🔧 Tool call: ${name}`, JSON.stringify(input));
-        const result = await executeTool(name!, input as any);
-        console.log(`📦 Tool result:`, result.slice(0, 200));
-        toolResults.push({
-          toolResult: {
-            toolUseId: toolUseId!,
-            content: [{ text: result }],
-          },
-        });
-      }
-    }
-
-    messages.push({ role: "user", content: toolResults });
-
-    response = await bedrockClient.send(
-      new ConverseCommand({
-        modelId: MODEL_ID,
-        system: [{ text: systemPrompt }],
-        messages,
-        toolConfig: { tools },
-      })
-    );
-  }
-
-  // Extract text response
-  const outputContent = response.output?.message?.content || [];
-  const textParts = outputContent
-    .filter((block) => block.text)
-    .map((block) => block.text);
-  
-  return textParts.join("\n") || "I processed your request.";
+// AG-UI event emitter helper
+function aguiEvent(type: string, data: Record<string, any> = {}): string {
+  return `data: ${JSON.stringify({ type, ...data })}\n\n`;
 }
 
-export const handler = async (event: any) => {
-  const corsHeaders = {
-    "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-  };
+// Main handler with Lambda Response Streaming
+export const handler = awslambda.streamifyResponse(
+  async (event: any, responseStream: any, _context: any) => {
+    const metadata = {
+      statusCode: 200,
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    };
 
-  if (event.requestContext?.http?.method === "OPTIONS") {
-    return { statusCode: 200, headers: corsHeaders, body: "" };
-  }
-
-  try {
-    const body = JSON.parse(event.body || "{}");
-    const message = body.message;
-
-    if (!message) {
-      return {
-        statusCode: 400,
-        headers: corsHeaders,
-        body: JSON.stringify({ error: "message is required" }),
-      };
+    // Handle CORS preflight
+    if (event.requestContext?.http?.method === "OPTIONS") {
+      responseStream = awslambda.HttpResponseStream.from(responseStream, { 
+        statusCode: 200, 
+        headers: metadata.headers 
+      });
+      responseStream.end();
+      return;
     }
 
-    const response = await processMessage(message);
+    responseStream = awslambda.HttpResponseStream.from(responseStream, metadata);
 
-    return {
-      statusCode: 200,
-      headers: corsHeaders,
-      body: JSON.stringify({ response }),
-    };
-  } catch (error) {
-    console.error("Chat error:", error);
-    return {
-      statusCode: 500,
-      headers: corsHeaders,
-      body: JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
-    };
+    try {
+      const body = JSON.parse(event.body || "{}");
+      const userMessage = body.message;
+
+      if (!userMessage) {
+        responseStream.write(aguiEvent("RUN_ERROR", { error: "message is required" }));
+        responseStream.end();
+        return;
+      }
+
+      const messageId = `msg-${Date.now()}`;
+      
+      // Emit start events
+      responseStream.write(aguiEvent("RUN_STARTED", { runId: `run-${Date.now()}` }));
+      responseStream.write(aguiEvent("TEXT_MESSAGE_START", { messageId }));
+
+      const messages: Message[] = [
+        { role: "user", content: [{ text: userMessage }] },
+      ];
+
+      let continueLoop = true;
+      let fullResponse = "";
+
+      while (continueLoop) {
+        const streamResponse = await bedrockClient.send(
+          new ConverseStreamCommand({
+            modelId: MODEL_ID,
+            system: [{ text: systemPrompt }],
+            messages,
+            toolConfig: { tools },
+          })
+        );
+
+        let currentToolId = "";
+        let currentToolName = "";
+        let currentToolArgs = "";
+        let pendingToolCalls: { id: string; name: string; args: any }[] = [];
+
+        if (streamResponse.stream) {
+          for await (const chunk of streamResponse.stream) {
+            // Stream text immediately
+            if (chunk.contentBlockDelta?.delta?.text) {
+              const text = chunk.contentBlockDelta.delta.text;
+              fullResponse += text;
+              responseStream.write(aguiEvent("TEXT_MESSAGE_CONTENT", { messageId, delta: text }));
+            }
+
+            if (chunk.contentBlockStart?.start?.toolUse) {
+              const toolUse = chunk.contentBlockStart.start.toolUse;
+              currentToolId = toolUse.toolUseId || `tool-${Date.now()}`;
+              currentToolName = toolUse.name || "";
+              currentToolArgs = "";
+              responseStream.write(aguiEvent("TOOL_CALL_START", { toolCallId: currentToolId, toolCallName: currentToolName }));
+            }
+
+            if (chunk.contentBlockDelta?.delta?.toolUse) {
+              const argsChunk = chunk.contentBlockDelta.delta.toolUse.input || "";
+              currentToolArgs += argsChunk;
+              responseStream.write(aguiEvent("TOOL_CALL_ARGS", { toolCallId: currentToolId, argsChunk }));
+            }
+
+            if (chunk.contentBlockStop && currentToolId) {
+              responseStream.write(aguiEvent("TOOL_CALL_END", { toolCallId: currentToolId }));
+              try {
+                pendingToolCalls.push({ id: currentToolId, name: currentToolName, args: JSON.parse(currentToolArgs || "{}") });
+              } catch {
+                pendingToolCalls.push({ id: currentToolId, name: currentToolName, args: {} });
+              }
+              currentToolId = "";
+              currentToolName = "";
+              currentToolArgs = "";
+            }
+
+            if (chunk.messageStop) {
+              const stopReason = chunk.messageStop.stopReason;
+              
+              if (stopReason === "tool_use" && pendingToolCalls.length > 0) {
+                const assistantContent: any[] = [];
+                if (fullResponse) assistantContent.push({ text: fullResponse });
+                for (const tc of pendingToolCalls) {
+                  assistantContent.push({ toolUse: { toolUseId: tc.id, name: tc.name, input: tc.args } });
+                }
+                messages.push({ role: "assistant", content: assistantContent });
+
+                const toolResultContent: any[] = [];
+                for (const tc of pendingToolCalls) {
+                  console.log(`🔧 Tool call: ${tc.name}`, JSON.stringify(tc.args));
+                  const result = await executeTool(tc.name, tc.args);
+                  console.log(`📦 Tool result:`, result.slice(0, 200));
+                  
+                  responseStream.write(aguiEvent("TOOL_CALL_RESULT", { toolCallId: tc.id, content: result }));
+                  toolResultContent.push({ toolResult: { toolUseId: tc.id, content: [{ text: result }] } });
+                }
+
+                messages.push({ role: "user", content: toolResultContent });
+                fullResponse = "";
+                pendingToolCalls = [];
+              } else {
+                continueLoop = false;
+              }
+            }
+          }
+        }
+      }
+
+      // Emit end events
+      responseStream.write(aguiEvent("TEXT_MESSAGE_END", { messageId }));
+      responseStream.write(aguiEvent("RUN_FINISHED", { runId: `run-${Date.now()}` }));
+      responseStream.end();
+
+    } catch (error) {
+      console.error("Chat error:", error);
+      responseStream.write(aguiEvent("RUN_ERROR", { error: error instanceof Error ? error.message : "Unknown error" }));
+      responseStream.end();
+    }
   }
-};
+);

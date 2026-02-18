@@ -1,6 +1,9 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
+import { Chat } from "./Chat";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3002";
+// Use Function URL for research (bypasses API Gateway 30s timeout)
+const RESEARCH_URL = import.meta.env.VITE_RESEARCH_URL || `${API_URL}/research`;
 
 interface Startup {
   id: string;
@@ -11,12 +14,6 @@ interface Startup {
   status?: string;
   source?: string;
   createdAt?: string;
-}
-
-interface Message {
-  id: string;
-  role: "user" | "assistant" | "system";
-  content: string;
 }
 
 interface ResearchResult {
@@ -30,19 +27,9 @@ function App() {
   const [activeTab, setActiveTab] = useState<"chat" | "startups" | "research">("chat");
   const [startups, setStartups] = useState<Startup[]>([]);
   const [loading, setLoading] = useState(false);
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "1",
-      role: "system",
-      content: "👋 I'm your Startup Research Agent. Ask me about startups in the database, funding rounds, or patterns!",
-    },
-  ]);
-  const [input, setInput] = useState("");
-  const [sending, setSending] = useState(false);
   const [researchTopic, setResearchTopic] = useState("");
   const [researching, setResearching] = useState(false);
   const [researchResult, setResearchResult] = useState<ResearchResult | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Fetch startups when tab changes
   useEffect(() => {
@@ -50,11 +37,6 @@ function App() {
       fetchStartups();
     }
   }, [activeTab]);
-
-  // Auto-scroll chat
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
 
   const fetchStartups = async () => {
     setLoading(true);
@@ -69,50 +51,6 @@ function App() {
     }
   };
 
-  const sendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!input.trim() || sending) return;
-
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      role: "user",
-      content: input,
-    };
-    setMessages((prev) => [...prev, userMessage]);
-    setInput("");
-    setSending(true);
-
-    try {
-      const res = await fetch(`${API_URL}/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: input }),
-      });
-
-      const data = await res.json();
-      
-      if (data.error) {
-        throw new Error(data.error);
-      }
-
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: "assistant",
-        content: data.response || "I processed your request.",
-      };
-      setMessages((prev) => [...prev, assistantMessage]);
-    } catch (err) {
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: "system",
-        content: `Error: ${err instanceof Error ? err.message : "Failed to send message"}`,
-      };
-      setMessages((prev) => [...prev, errorMessage]);
-    } finally {
-      setSending(false);
-    }
-  };
-
   const startResearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!researchTopic.trim() || researching) return;
@@ -121,11 +59,18 @@ function App() {
     setResearchResult(null);
 
     try {
-      const res = await fetch(`${API_URL}/research`, {
+      // Research can take several minutes with Function URL (10 min timeout)
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 600000); // 10 min timeout
+      
+      const res = await fetch(RESEARCH_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ topic: researchTopic }),
+        signal: controller.signal,
       });
+      
+      clearTimeout(timeoutId);
 
       const data = await res.json();
       
@@ -174,36 +119,8 @@ function App() {
         </div>
       </div>
 
-      {/* Chat Tab */}
-      {activeTab === "chat" && (
-        <div className="chat-container">
-          <div className="chat-messages">
-            {messages.map((msg) => (
-              <div key={msg.id} className={`message ${msg.role}`}>
-                <div style={{ whiteSpace: "pre-wrap" }}>{msg.content}</div>
-              </div>
-            ))}
-            {sending && (
-              <div className="message assistant">
-                <em>🤔 Thinking...</em>
-              </div>
-            )}
-            <div ref={messagesEndRef} />
-          </div>
-          <form className="chat-input" onSubmit={sendMessage}>
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask about startups... (e.g., 'List all AI startups')"
-              disabled={sending}
-            />
-            <button type="submit" disabled={sending || !input.trim()}>
-              Send
-            </button>
-          </form>
-        </div>
-      )}
+      {/* Chat Tab - AG-UI Streaming */}
+      {activeTab === "chat" && <Chat />}
 
       {/* Research Tab */}
       {activeTab === "research" && (
@@ -346,7 +263,10 @@ function App() {
                     <p className="description">{startup.description}</p>
                   )}
                   <div className="tags">
-                    {startup.industries?.map((ind) => (
+                    {(Array.isArray(startup.industries) 
+                      ? startup.industries 
+                      : []
+                    ).map((ind) => (
                       <span key={ind} className="tag">
                         {ind}
                       </span>

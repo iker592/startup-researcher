@@ -6,6 +6,11 @@
 
 declare module "sst" {
   export interface Resource {
+    "ChatFunction": {
+      "name": string
+      "type": "sst.aws.Function"
+      "url": string
+    }
     "ResearchApi": {
       "type": "sst.aws.ApiGatewayV2"
       "url": string
@@ -13,6 +18,11 @@ declare module "sst" {
     "ResearchData": {
       "name": string
       "type": "sst.aws.Dynamo"
+    }
+    "ResearchFunction": {
+      "name": string
+      "type": "sst.aws.Function"
+      "url": string
     }
     "Site": {
       "type": "sst.aws.StaticSite"
