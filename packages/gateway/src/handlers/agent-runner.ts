@@ -18,17 +18,9 @@ function normalizeEmail(email: string): string {
 }
 
 export async function handler(event: any) {
-  // CORS preflight
+  // CORS preflight handled by Function URL config
   if (event.requestContext?.http?.method === "OPTIONS") {
-    return {
-      statusCode: 200,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-      },
-      body: "",
-    };
+    return { statusCode: 200, body: "" };
   }
 
   try {
@@ -37,7 +29,7 @@ export async function handler(event: any) {
     if (!user) {
       return {
         statusCode: 401,
-        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ error: "Authentication required" }),
       };
     }
@@ -49,7 +41,7 @@ export async function handler(event: any) {
     if (!agentId) {
       return {
         statusCode: 400,
-        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ error: "agentId is required" }),
       };
     }
@@ -66,7 +58,7 @@ export async function handler(event: any) {
     if (!agentResult.Item) {
       return {
         statusCode: 404,
-        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ error: "Agent not found" }),
       };
     }
@@ -76,12 +68,13 @@ export async function handler(event: any) {
 
     console.log(`[AgentRunner] Running agent "${agent.name}" for user ${userId}`);
 
-    // Run the full agent with tools
+    // Run the full agent with tools (inject skills if attached)
     const result = await runAgentWithTools({
       id: agentId,
       name: agent.name,
       prompt,
       userId,
+      skillIds: agent.skillIds || [],
     });
 
     // Log the run
@@ -107,14 +100,14 @@ export async function handler(event: any) {
 
     return {
       statusCode: 200,
-      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ success: true, runId, result }),
     };
   } catch (error) {
     console.error("[AgentRunner] Error:", error);
     return {
       statusCode: 500,
-      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
     };
   }

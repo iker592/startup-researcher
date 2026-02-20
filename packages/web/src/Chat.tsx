@@ -13,6 +13,14 @@ import { useState, useRef, useEffect, useCallback } from "react";
 // Use Function URL for streaming (bypasses API Gateway limits)
 const CHAT_URL = import.meta.env.VITE_CHAT_URL || `${import.meta.env.VITE_API_URL || "http://localhost:3002"}/chat`;
 
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3002";
+
+interface Skill {
+  id: string;
+  name: string;
+  description: string;
+}
+
 interface ChatProps {
   token?: string | null;
 }
@@ -186,26 +194,51 @@ interface AGUIEvent {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export function Chat({ token }: ChatProps) {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "welcome",
-      role: "assistant",
-      content: `👋 I'm your Startup Research Agent. Ask me about startups in the database!
-
-Try:
-• "List all startups"
-• "Show me AI startups"
-• "What funding rounds does Cursor have?"`,
-      timestamp: new Date(),
-    },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [activeSkillIds, setActiveSkillIds] = useState<Set<string>>(new Set());
+  const [showPlusMenu, setShowPlusMenu] = useState(false);
+  const plusMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Fetch skills
+  useEffect(() => {
+    if (!token) return;
+    fetch(`${API_URL}/skills`, {
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    })
+      .then(r => r.json())
+      .then(d => setSkills(d.skills || []))
+      .catch(() => {});
+  }, [token]);
+
+  // Close plus menu on outside click
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      if (plusMenuRef.current && !plusMenuRef.current.contains(e.target as Node)) {
+        setShowPlusMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  const toggleSkill = (id: string) => {
+    setActiveSkillIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const activeSkillIdsRef = useRef(activeSkillIds);
+  activeSkillIdsRef.current = activeSkillIds;
 
   const sendMessage = useCallback(async (userMessage: string) => {
     setLoading(true);
@@ -259,7 +292,10 @@ Try:
       const response = await fetch(CHAT_URL, {
         method: "POST",
         headers,
-        body: JSON.stringify({ message: userMessage }),
+        body: JSON.stringify({
+          message: userMessage,
+          skillIds: Array.from(activeSkillIdsRef.current),
+        }),
       });
 
       if (!response.ok) {
@@ -448,12 +484,70 @@ Try:
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Active skills pills */}
+      {activeSkillIds.size > 0 && (
+        <div style={styles.activeSkills}>
+          {Array.from(activeSkillIds).map(id => {
+            const skill = skills.find(s => s.id === id);
+            return skill ? (
+              <span key={id} style={styles.skillPill}>
+                🧩 /{skill.name}
+                <span onClick={() => toggleSkill(id)} style={styles.skillPillRemove}>✕</span>
+              </span>
+            ) : null;
+          })}
+        </div>
+      )}
+
       <form onSubmit={handleSubmit} style={styles.form}>
+        {/* Plus button with dropdown */}
+        <div ref={plusMenuRef} style={{ position: "relative" }}>
+          <button
+            type="button"
+            onClick={() => setShowPlusMenu(!showPlusMenu)}
+            style={{
+              ...styles.plusButton,
+              background: showPlusMenu ? "#333" : "transparent",
+            }}
+          >
+            +
+          </button>
+          {showPlusMenu && (
+            <div style={styles.plusMenu}>
+              <div style={styles.plusMenuHeader}>🧩 Skills</div>
+              {skills.length === 0 ? (
+                <div style={styles.plusMenuItem}>No skills yet</div>
+              ) : (
+                skills.map(skill => (
+                  <div
+                    key={skill.id}
+                    onClick={() => { toggleSkill(skill.id); setShowPlusMenu(false); }}
+                    style={{
+                      ...styles.plusMenuItem,
+                      background: activeSkillIds.has(skill.id) ? "#1e3a5f" : "transparent",
+                    }}
+                  >
+                    <span>{activeSkillIds.has(skill.id) ? "✅" : "⬜"}</span>
+                    <div>
+                      <div style={{ fontWeight: 500 }}>/{skill.name}</div>
+                      {skill.description && (
+                        <div style={{ fontSize: 11, color: "#777", marginTop: 2 }}>
+                          {skill.description.slice(0, 60)}{skill.description.length > 60 ? "..." : ""}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+
         <input
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask about startups..."
+          placeholder="Ask anything..."
           style={styles.input}
           disabled={loading}
         />
@@ -480,92 +574,90 @@ const styles: Record<string, React.CSSProperties> = {
   container: {
     display: "flex",
     flexDirection: "column",
-    height: "60vh",
-    minHeight: 400,
-    border: "1px solid #e5e7eb",
-    borderRadius: 12,
+    height: "100%",
     overflow: "hidden",
-    background: "#fff",
+    background: "#212121",
   },
   header: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    padding: "12px 16px",
-    background: "linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)",
-    color: "white",
-    fontWeight: 600,
+    display: "none",
   },
   badge: {
-    marginLeft: "auto",
-    fontSize: 11,
-    background: "rgba(255,255,255,0.2)",
-    padding: "2px 8px",
-    borderRadius: 12,
+    display: "none",
   },
   messages: {
     flex: 1,
     overflowY: "auto",
-    padding: 16,
+    padding: "16px 16px",
     display: "flex",
     flexDirection: "column",
     gap: 12,
-    background: "#f9fafb",
+    background: "#212121",
+    maxWidth: 800,
+    width: "100%",
+    margin: "0 auto",
   },
   message: {
     display: "flex",
-    gap: 8,
+    gap: 10,
     alignItems: "flex-start",
   },
   userMessage: {
     flexDirection: "row-reverse",
   },
   avatar: {
-    fontSize: 24,
+    fontSize: 22,
     lineHeight: 1,
+    marginTop: 2,
   },
   bubble: {
-    maxWidth: "80%",
-    padding: "10px 14px",
-    borderRadius: 16,
-    background: "#fff",
-    border: "1px solid #e5e7eb",
+    maxWidth: "85%",
+    padding: "12px 16px",
+    borderRadius: 18,
+    background: "#2a2a2a",
+    border: "1px solid #333",
     wordBreak: "break-word",
+    color: "#ececec",
+    fontSize: 14,
+    lineHeight: 1.6,
   },
   userBubble: {
-    background: "#4f46e5",
+    background: "#10a37f",
     color: "white",
     border: "none",
   },
   thinking: {
-    color: "#666",
+    color: "#777",
     fontStyle: "italic",
   },
   form: {
     display: "flex",
-    gap: 8,
-    padding: 12,
-    borderTop: "1px solid #e5e7eb",
-    background: "#fff",
+    gap: 10,
+    padding: "12px 16px 24px",
+    background: "#212121",
+    maxWidth: 800,
+    width: "100%",
+    margin: "0 auto",
   },
   input: {
     flex: 1,
-    padding: "10px 14px",
-    border: "1px solid #e5e7eb",
-    borderRadius: 20,
+    padding: "12px 18px",
+    border: "1px solid #444",
+    borderRadius: 24,
     fontSize: 14,
     outline: "none",
+    background: "#2a2a2a",
+    color: "#ececec",
   },
   button: {
-    padding: "10px 20px",
-    background: "#4f46e5",
+    padding: "12px 22px",
+    background: "#10a37f",
     color: "white",
     border: "none",
-    borderRadius: 20,
+    borderRadius: 24,
     fontWeight: 600,
     cursor: "pointer",
+    fontSize: 14,
   },
-  // Generative UI styles
   startupsGrid: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
@@ -574,15 +666,15 @@ const styles: Record<string, React.CSSProperties> = {
   },
   startupCard: {
     padding: 12,
-    background: "#f8fafc",
+    background: "#333",
     borderRadius: 8,
-    border: "1px solid #e2e8f0",
+    border: "1px solid #444",
   },
   tag: {
     fontSize: 11,
     padding: "2px 6px",
-    background: "#e0e7ff",
-    color: "#4338ca",
+    background: "#1e3a5f",
+    color: "#93c5fd",
     borderRadius: 4,
   },
   fundingList: {
@@ -595,25 +687,26 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     gap: 12,
     padding: 8,
-    background: "#f0fdf4",
+    background: "#0d2818",
     borderRadius: 6,
     alignItems: "center",
+    color: "#6ee7b7",
   },
   successCard: {
     padding: 12,
-    background: "#d1fae5",
+    background: "#0d2818",
     borderRadius: 8,
     marginTop: 8,
-    color: "#065f46",
+    color: "#6ee7b7",
   },
   emptyCard: {
     padding: 12,
-    color: "#6b7280",
+    color: "#777",
     fontStyle: "italic",
   },
   pendingTool: {
     padding: 8,
-    color: "#6b7280",
+    color: "#777",
     fontStyle: "italic",
     marginTop: 8,
     display: "flex",
@@ -625,11 +718,81 @@ const styles: Record<string, React.CSSProperties> = {
   },
   genericTool: {
     padding: 8,
-    background: "#f3f4f6",
+    background: "#333",
     borderRadius: 6,
     marginTop: 8,
     fontSize: 13,
     fontFamily: "monospace",
+    color: "#b4b4b4",
+  },
+  activeSkills: {
+    display: "flex",
+    gap: 6,
+    flexWrap: "wrap" as const,
+    padding: "0 16px 4px",
+    maxWidth: 800,
+    width: "100%",
+    margin: "0 auto",
+  },
+  skillPill: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "4px 10px",
+    background: "#1e3a5f",
+    borderRadius: 12,
+    fontSize: 12,
+    color: "#93c5fd",
+  },
+  skillPillRemove: {
+    cursor: "pointer",
+    opacity: 0.6,
+    fontSize: 10,
+  },
+  plusButton: {
+    width: 36,
+    height: 36,
+    borderRadius: "50%",
+    border: "1px solid #444",
+    color: "#b4b4b4",
+    fontSize: 20,
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+    transition: "background 0.2s",
+  },
+  plusMenu: {
+    position: "absolute" as const,
+    bottom: 44,
+    left: 0,
+    minWidth: 240,
+    background: "#2a2a2a",
+    border: "1px solid #444",
+    borderRadius: 12,
+    padding: 6,
+    boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
+    zIndex: 100,
+  },
+  plusMenuHeader: {
+    padding: "6px 10px",
+    fontSize: 12,
+    color: "#777",
+    fontWeight: 600,
+    textTransform: "uppercase" as const,
+    letterSpacing: 0.5,
+  },
+  plusMenuItem: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "8px 10px",
+    borderRadius: 8,
+    cursor: "pointer",
+    fontSize: 13,
+    color: "#ececec",
+    transition: "background 0.15s",
   },
 };
 

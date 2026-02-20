@@ -4,7 +4,7 @@
  */
 
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, PutCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, PutCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
 import { Resource } from "sst";
 import { BedrockRuntimeClient, ConverseCommand } from "@aws-sdk/client-bedrock-runtime";
 
@@ -117,11 +117,17 @@ const createSaveDocTool = (agentId: string, agentName: string): Tool => ({
     required: ["title", "description", "content"]
   },
   execute: async (input, userId) => {
-    const { title, tags = [], description, content, sourceUrl } = input;
+    const { title, tags: rawTags = [], description, content, sourceUrl } = input;
     const id = `doc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const now = new Date().toISOString();
     
-    const allTags = [...new Set([...tags, agentName])];
+    // Normalize tags: handle string, comma-separated string, or array
+    const parsedTags = Array.isArray(rawTags)
+      ? rawTags
+      : typeof rawTags === "string"
+        ? rawTags.split(",").map((t: string) => t.trim()).filter(Boolean)
+        : [];
+    const allTags = [...new Set([...parsedTags, agentName])];
     
     await ddb.send(new PutCommand({
       TableName: TABLE,
@@ -163,12 +169,35 @@ interface AgentConfig {
   name: string;
   prompt: string;
   userId: string;
+  skillIds?: string[];
+}
+
+async function fetchSkillInstructions(skillIds: string[]): Promise<string> {
+  if (!skillIds || skillIds.length === 0) return "";
+  
+  const skills: string[] = [];
+  for (const skillId of skillIds) {
+    try {
+      const result = await ddb.send(new GetCommand({
+        TableName: TABLE,
+        Key: { pk: `SKILL#${skillId}`, sk: `SKILL#${skillId}` },
+      }));
+      if (result.Item) {
+        skills.push(`## Skill: ${result.Item.name}\n${result.Item.description ? `> ${result.Item.description}\n` : ""}${result.Item.instructions}`);
+      }
+    } catch (e) {
+      console.error(`Failed to fetch skill ${skillId}:`, e);
+    }
+  }
+  
+  return skills.length > 0 ? `\n\n# Active Skills\n\n${skills.join("\n\n---\n\n")}` : "";
 }
 
 export async function runAgentWithTools(config: AgentConfig): Promise<string> {
-  const { id, name, prompt, userId } = config;
+  const { id, name, prompt, userId, skillIds } = config;
   
   const tools = getTools(id, name);
+  const skillInstructions = await fetchSkillInstructions(skillIds || []);
   
   const systemPrompt = `You are a research agent called "${name}". Your job is to:
 1. Search the web for information using the web_search tool
@@ -178,7 +207,7 @@ export async function runAgentWithTools(config: AgentConfig): Promise<string> {
 IMPORTANT: You MUST use the save_doc tool to save at least 1-3 documents with your key findings.
 Each document should have a clear title, relevant tags, a brief description, and detailed content.
 
-Research task: ${prompt}`;
+Research task: ${prompt}${skillInstructions}`;
 
   const messages: Array<{ role: "user" | "assistant"; content: any }> = [
     { role: "user", content: [{ text: `Please research this topic and save your findings: ${prompt}` }] }

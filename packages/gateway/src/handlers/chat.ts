@@ -13,6 +13,7 @@ import {
   QueryCommand,
   PutCommand,
   GetCommand,
+  BatchGetCommand,
 } from "@aws-sdk/lib-dynamodb";
 import {
   BedrockRuntimeClient,
@@ -198,7 +199,7 @@ async function executeTool(name: string, input: any, userId: string): Promise<st
   return JSON.stringify({ error: `Unknown tool: ${name}` });
 }
 
-const systemPrompt = `You are a startup research assistant. You help users query and analyze startup data from a database.
+const BASE_SYSTEM_PROMPT = `You are a startup research assistant. You help users query and analyze startup data from a database.
 
 Available data:
 - Startups: name, description, industries, website, status
@@ -207,6 +208,28 @@ Available data:
 When users ask about startups, use the db_query tool to fetch data.
 When presenting results, format them clearly with bullet points.
 Be concise but informative.`;
+
+async function buildSystemPrompt(skillIds?: string[]): Promise<string> {
+  if (!skillIds || skillIds.length === 0) return BASE_SYSTEM_PROMPT;
+  
+  const skills: string[] = [];
+  for (const skillId of skillIds) {
+    try {
+      const result = await dbClient.send(new GetCommand({
+        TableName: Resource.ResearchData.name,
+        Key: { pk: `SKILL#${skillId}`, sk: `SKILL#${skillId}` },
+      }));
+      if (result.Item) {
+        skills.push(`## Skill: ${result.Item.name}\n${result.Item.description ? `> ${result.Item.description}\n` : ""}${result.Item.instructions}`);
+      }
+    } catch (e) {
+      console.error(`Failed to fetch skill ${skillId}:`, e);
+    }
+  }
+  
+  if (skills.length === 0) return BASE_SYSTEM_PROMPT;
+  return `${BASE_SYSTEM_PROMPT}\n\n# Active Skills\n\n${skills.join("\n\n---\n\n")}`;
+}
 
 // AG-UI event emitter helper
 function aguiEvent(type: string, data: Record<string, any> = {}): string {
@@ -252,6 +275,7 @@ export const handler = awslambda.streamifyResponse(
       
       const body = JSON.parse(event.body || "{}");
       const userMessage = body.message;
+      const skillIds: string[] = body.skillIds || [];
 
       if (!userMessage) {
         responseStream.write(aguiEvent("RUN_ERROR", { error: "message is required" }));
@@ -259,6 +283,9 @@ export const handler = awslambda.streamifyResponse(
         return;
       }
 
+      console.log(`🧩 Skills requested: ${JSON.stringify(skillIds)}`);
+      const systemPrompt = await buildSystemPrompt(skillIds);
+      console.log(`🧩 System prompt length: ${systemPrompt.length}, has skills: ${systemPrompt.includes('Active Skills')}`);
       const messageId = `msg-${Date.now()}`;
       
       // Emit start events

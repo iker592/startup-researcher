@@ -1,15 +1,5 @@
 /// <reference path="./.sst/platform/config.d.ts" />
 
-/**
- * 🔍 Startup Researcher - SST Config
- * 
- * AI-powered startup pattern recognition system
- * - DynamoDB for startup data
- * - AWS Bedrock (Claude) for AI agents
- * - React frontend with chat + startup browser
- * - Single-table design for flexibility
- */
-
 export default $config({
   app(input) {
     return {
@@ -25,11 +15,12 @@ export default $config({
   },
   async run() {
     // ════════════════════════════════════════════════════════════════
-    // 🔐 Auth0 Secrets (reusing from sst-starter)
+    // 🔐 Auth0 Secrets
     // ════════════════════════════════════════════════════════════════
     const auth0Domain = new sst.Secret("Auth0Domain");
     const auth0ClientId = new sst.Secret("Auth0ClientId");
     const auth0ClientSecret = new sst.Secret("Auth0ClientSecret");
+
     // ════════════════════════════════════════════════════════════════
     // 🗄️ Database (DynamoDB - Single Table Design)
     // ════════════════════════════════════════════════════════════════
@@ -46,197 +37,131 @@ export default $config({
       },
     });
 
+    const authSecrets = [table, auth0Domain, auth0ClientId, auth0ClientSecret];
+
     // ════════════════════════════════════════════════════════════════
-    // 🔧 Research Gateway API (for non-streaming endpoints)
+    // 🔧 API Gateway
     // ════════════════════════════════════════════════════════════════
     const api = new sst.aws.ApiGatewayV2("ResearchApi");
 
-    // Health check
     api.route("GET /", {
       handler: "packages/gateway/src/handlers/health.handler",
     });
-
-    // List available tools
     api.route("GET /tools", {
       handler: "packages/gateway/src/handlers/tools.list",
     });
-
-    // Execute tools
     api.route("POST /tools/{name}", {
       handler: "packages/gateway/src/handlers/tools.execute",
       link: [table],
       timeout: "30 seconds",
     });
 
-    // Direct DB operations (need auth secrets for user validation)
-    api.route("GET /startups", {
-      handler: "packages/gateway/src/handlers/startups.list",
-      link: [table, auth0Domain, auth0ClientId, auth0ClientSecret],
-    });
+    // Startups
+    api.route("GET /startups", { handler: "packages/gateway/src/handlers/startups.list", link: authSecrets });
+    api.route("POST /startups", { handler: "packages/gateway/src/handlers/startups.create", link: authSecrets });
+    api.route("GET /startups/{id}", { handler: "packages/gateway/src/handlers/startups.get", link: authSecrets });
 
-    api.route("POST /startups", {
-      handler: "packages/gateway/src/handlers/startups.create",
-      link: [table, auth0Domain, auth0ClientId, auth0ClientSecret],
-    });
-
-    api.route("GET /startups/{id}", {
-      handler: "packages/gateway/src/handlers/startups.get",
-      link: [table, auth0Domain, auth0ClientId, auth0ClientSecret],
-    });
-
-    // Auth routes - explicit paths for reliability
-    const authHandler = {
-      handler: "packages/gateway/src/handlers/auth.handler",
-      link: [table, auth0Domain, auth0ClientId, auth0ClientSecret],
-    };
+    // Auth
+    const authHandler = { handler: "packages/gateway/src/handlers/auth.handler", link: authSecrets };
     api.route("GET /auth/authorize", authHandler);
     api.route("GET /auth/callback", authHandler);
     api.route("GET /auth/me", authHandler);
     api.route("GET /auth/logout", authHandler);
 
+    // Docs
+    const docsHandler = { link: authSecrets };
+    api.route("GET /docs", { handler: "packages/gateway/src/handlers/docs.list", ...docsHandler });
+    api.route("GET /docs/tags", { handler: "packages/gateway/src/handlers/docs.tags", ...docsHandler });
+    api.route("GET /docs/{id}", { handler: "packages/gateway/src/handlers/docs.get", ...docsHandler });
+    api.route("DELETE /docs/{id}", { handler: "packages/gateway/src/handlers/docs.remove", ...docsHandler });
+
+    // Skills
+    api.route("GET /skills", { handler: "packages/gateway/src/handlers/skills.list", link: authSecrets });
+    api.route("POST /skills", { handler: "packages/gateway/src/handlers/skills.create", link: authSecrets });
+    api.route("GET /skills/{id}", { handler: "packages/gateway/src/handlers/skills.get", link: authSecrets });
+    api.route("PUT /skills/{id}", { handler: "packages/gateway/src/handlers/skills.update", link: authSecrets });
+    api.route("DELETE /skills/{id}", { handler: "packages/gateway/src/handlers/skills.remove", link: authSecrets });
+
     // ════════════════════════════════════════════════════════════════
-    // 📄 Docs API (generic document storage)
+    // 🤖 AI Agent Endpoints (Function URLs for long-running tasks)
     // ════════════════════════════════════════════════════════════════
-    const docsHandler = {
-      link: [table, auth0Domain, auth0ClientId, auth0ClientSecret],
-    };
-    api.route("GET /docs", {
-      handler: "packages/gateway/src/handlers/docs.list",
-      ...docsHandler,
+    const chatFn = new sst.aws.Function("ChatFunction", {
+      handler: "packages/gateway/src/handlers/chat.handler",
+      link: authSecrets,
+      timeout: "5 minutes",
+      memory: "1024 MB",
+      url: { authorization: "none", cors: true },
+      permissions: [{ actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"], resources: ["*"] }],
+      streaming: true,
     });
-    api.route("GET /docs/tags", {
-      handler: "packages/gateway/src/handlers/docs.tags",
-      ...docsHandler,
+
+    const researchFn = new sst.aws.Function("ResearchFunction", {
+      handler: "packages/gateway/src/handlers/research.handler",
+      link: authSecrets,
+      timeout: "10 minutes",
+      memory: "1024 MB",
+      url: { authorization: "none", cors: true },
+      permissions: [{ actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"], resources: ["*"] }],
     });
-    api.route("GET /docs/{id}", {
-      handler: "packages/gateway/src/handlers/docs.get",
-      ...docsHandler,
+
+    const agentRunnerFn = new sst.aws.Function("AgentRunnerFunction", {
+      handler: "packages/gateway/src/handlers/agent-runner.handler",
+      link: authSecrets,
+      timeout: "10 minutes",
+      memory: "1024 MB",
+      url: { authorization: "none", cors: true },
+      permissions: [{ actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"], resources: ["*"] }],
     });
-    api.route("DELETE /docs/{id}", {
-      handler: "packages/gateway/src/handlers/docs.remove",
-      ...docsHandler,
+
+    // ════════════════════════════════════════════════════════════════
+    // 📅 EventBridge Scheduler Role
+    // ════════════════════════════════════════════════════════════════
+    const schedulerRole = new aws.iam.Role("SchedulerRole", {
+      assumeRolePolicy: JSON.stringify({
+        Version: "2012-10-17",
+        Statement: [{ Effect: "Allow", Principal: { Service: "scheduler.amazonaws.com" }, Action: "sts:AssumeRole" }],
+      }),
+    });
+
+    new aws.iam.RolePolicy("SchedulerInvokePolicy", {
+      role: schedulerRole.id,
+      policy: agentRunnerFn.nodes.function.arn.apply(arn => JSON.stringify({
+        Version: "2012-10-17",
+        Statement: [{ Effect: "Allow", Action: ["lambda:InvokeFunction"], Resource: [arn] }],
+      })),
     });
 
     // ════════════════════════════════════════════════════════════════
     // 🤖 Scheduled Agents API
     // ════════════════════════════════════════════════════════════════
     const agentsHandler = {
-      link: [table, auth0Domain, auth0ClientId, auth0ClientSecret],
+      link: authSecrets,
       timeout: "5 minutes",
       memory: "1024 MB",
+      environment: {
+        AGENT_RUNTIME_ARN: agentRunnerFn.nodes.function.arn,
+        SCHEDULER_ROLE_ARN: schedulerRole.arn,
+      },
       permissions: [
-        {
-          actions: [
-            "scheduler:CreateSchedule",
-            "scheduler:UpdateSchedule", 
-            "scheduler:DeleteSchedule",
-            "scheduler:GetSchedule",
-          ],
-          resources: ["*"],
-        },
-        {
-          actions: ["iam:PassRole"],
-          resources: ["*"],
-        },
-        {
-          actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
-          resources: ["*"],
-        },
+        { actions: ["scheduler:CreateSchedule", "scheduler:UpdateSchedule", "scheduler:DeleteSchedule", "scheduler:GetSchedule"], resources: ["*"] },
+        { actions: ["iam:PassRole"], resources: ["*"] },
+        { actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"], resources: ["*"] },
       ],
     };
-    api.route("GET /agents", {
-      handler: "packages/gateway/src/handlers/agents.list",
-      ...agentsHandler,
-    });
-    api.route("POST /agents", {
-      handler: "packages/gateway/src/handlers/agents.create",
-      ...agentsHandler,
-    });
-    api.route("GET /agents/{id}", {
-      handler: "packages/gateway/src/handlers/agents.get",
-      ...agentsHandler,
-    });
-    api.route("PUT /agents/{id}", {
-      handler: "packages/gateway/src/handlers/agents.update",
-      ...agentsHandler,
-    });
-    api.route("DELETE /agents/{id}", {
-      handler: "packages/gateway/src/handlers/agents.remove",
-      ...agentsHandler,
-    });
-    api.route("POST /agents/{id}/run", {
-      handler: "packages/gateway/src/handlers/agents.run",
-      ...agentsHandler,
-    });
+    api.route("GET /agents", { handler: "packages/gateway/src/handlers/agents.list", ...agentsHandler });
+    api.route("POST /agents", { handler: "packages/gateway/src/handlers/agents.create", ...agentsHandler });
+    api.route("GET /agents/{id}", { handler: "packages/gateway/src/handlers/agents.get", ...agentsHandler });
+    api.route("PUT /agents/{id}", { handler: "packages/gateway/src/handlers/agents.update", ...agentsHandler });
+    api.route("DELETE /agents/{id}", { handler: "packages/gateway/src/handlers/agents.remove", ...agentsHandler });
+    api.route("POST /agents/{id}/run", { handler: "packages/gateway/src/handlers/agents.run", ...agentsHandler });
+    api.route("GET /agents/{id}/runs", { handler: "packages/gateway/src/handlers/agents.runs", ...agentsHandler });
 
     // ════════════════════════════════════════════════════════════════
-    // 🤖 AI Agent Endpoints (Lambda Function URLs for streaming)
-    // ════════════════════════════════════════════════════════════════
-    
-    // Chat - Query agent with streaming
-    const chatFn = new sst.aws.Function("ChatFunction", {
-      handler: "packages/gateway/src/handlers/chat.handler",
-      link: [table, auth0Domain, auth0ClientId, auth0ClientSecret],
-      timeout: "5 minutes",
-      memory: "1024 MB",
-      url: {
-        authorization: "none",
-        cors: true,
-      },
-      permissions: [
-        {
-          actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
-          resources: ["*"],
-        },
-      ],
-      streaming: true,
-    });
-
-    // Research - Research agent with streaming
-    const researchFn = new sst.aws.Function("ResearchFunction", {
-      handler: "packages/gateway/src/handlers/research.handler",
-      link: [table, auth0Domain, auth0ClientId, auth0ClientSecret],
-      timeout: "10 minutes",
-      memory: "1024 MB",
-      url: {
-        authorization: "none",
-        cors: true,
-      },
-      permissions: [
-        {
-          actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
-          resources: ["*"],
-        },
-      ],
-    });
-
-    // Agent Runner - Executes scheduled agents (Function URL bypasses 30s API GW limit)
-    const agentRunnerFn = new sst.aws.Function("AgentRunnerFunction", {
-      handler: "packages/gateway/src/handlers/agent-runner.handler",
-      link: [table, auth0Domain, auth0ClientId, auth0ClientSecret],
-      timeout: "10 minutes",
-      memory: "1024 MB",
-      url: {
-        authorization: "none",
-        cors: true,
-      },
-      permissions: [
-        {
-          actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
-          resources: ["*"],
-        },
-      ],
-    });
-
-    // ════════════════════════════════════════════════════════════════
-    // 🌐 Frontend (React + Vite)
+    // 🌐 Frontend
     // ════════════════════════════════════════════════════════════════
     const site = new sst.aws.StaticSite("Site", {
       path: "packages/web",
-      build: {
-        command: "bun run build",
-        output: "dist",
-      },
+      build: { command: "bun run build", output: "dist" },
       environment: {
         VITE_API_URL: api.url,
         VITE_CHAT_URL: chatFn.url,

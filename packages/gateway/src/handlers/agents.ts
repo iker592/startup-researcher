@@ -195,6 +195,7 @@ export const create = async (event: any) => {
       timezone: body.timezone || 'UTC',
       enabled: body.enabled !== false,
       scheduleName,
+      skillIds: body.skillIds || [],
       lastRunAt: null,
       nextRunAt: null, // Could calculate from cron
       createdAt: now,
@@ -329,6 +330,11 @@ export const update = async (event: any) => {
       names['#cron'] = 'cronExpression';
       values[':schedule'] = body.schedule;
       values[':cron'] = cronExpression;
+    }
+    if (body.skillIds !== undefined) {
+      updates.push('#skillIds = :skillIds');
+      names['#skillIds'] = 'skillIds';
+      values[':skillIds'] = body.skillIds;
     }
     if (body.enabled !== undefined) {
       updates.push('#enabled = :enabled');
@@ -530,6 +536,43 @@ export const run = async (event: any) => {
     };
   } catch (error) {
     console.error("Agent run error:", error);
+    return {
+      statusCode: 500,
+      headers: corsHeaders(),
+      body: JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
+    };
+  }
+};
+
+// ============================================================================
+// GET /agents/{id}/runs - List agent run history
+// ============================================================================
+export const runs = async (event: any) => {
+  try {
+    const user = await getUserFromRequest(event);
+    if (!user) return { statusCode: 401, headers: corsHeaders(), body: JSON.stringify({ error: "Unauthorized" }) };
+
+    const userId = normalizeEmail(user.email);
+    const id = event.pathParameters?.id;
+    if (!id) return { statusCode: 400, headers: corsHeaders(), body: JSON.stringify({ error: "Agent ID required" }) };
+
+    const result = await dbClient.send(new QueryCommand({
+      TableName: Resource.ResearchData.name,
+      KeyConditionExpression: "pk = :pk AND begins_with(sk, :sk)",
+      ExpressionAttributeValues: {
+        ":pk": `USER#${userId}#AGENT#${id}`,
+        ":sk": "RUN#",
+      },
+      ScanIndexForward: false,
+      Limit: 20,
+    }));
+
+    return {
+      statusCode: 200,
+      headers: corsHeaders(),
+      body: JSON.stringify({ runs: result.Items || [] }),
+    };
+  } catch (error) {
     return {
       statusCode: 500,
       headers: corsHeaders(),
